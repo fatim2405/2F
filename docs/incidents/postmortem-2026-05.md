@@ -8,7 +8,7 @@
 | **Authors** | Fatima Haji (draft), Mahmood Khalil (review) |
 | **Detected by** | Support (merchant phone calls) |
 | **Duration** | 2026-05-13 22:47 – 2026-05-14 11:20 Bahrain (12 h 33 m), monitoring until 17:30 |
-| **Related** | FP-198, FP-212, #fp-ops thread 2026-05-13 (docs/archive/slack-export-fp-ops-2026-05.txt) |
+| **Related** | FP-198, FP-212, #fp-ops thread 2026-05-13 |
 
 ## Summary
 

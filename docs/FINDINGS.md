@@ -1,8 +1,7 @@
 # Findings report
 
 Every problem found in the FilsPay audit, its root cause, the fix, and how
-the fix was checked. Generated from the bug tracker (FilsPay - Bug Tracker.xlsx)
-so the two always agree.
+the fix was checked.
 
 | | Count |
 |---|---|
@@ -159,7 +158,7 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 |---|---|---|---|---|---|---|
 | 29 | FP-187 paid after expiry | Ticket | Expiry used the customer's clock | Use server clock | paymentLinks/pay.ts | new test fails on old code |
 | 30 | Incident 2026-05-14 link charged twice | Ticket | Timed-out reservation let a second payment in | Per-attempt reservation_id; loser voids its charge | paymentLinks/pay.ts, 0073 | new test (old: both charged) |
-| 32 | Expired links still showed as active on the merchant dashboard | You (merchant website) | Dashboard showed the stored status; expired is never stored, so expired links looked live and the Active filter included them | Show and filter active links past their expiry as expired; website knows the expired status | paymentLinks/serialize.ts, query.ts, apps/web | new test; live: 10 of 11 active links were really expired |
+| 32 | Expired links still showed as active on the merchant dashboard | Team testing the merchant website | Dashboard showed the stored status; expired is never stored, so expired links looked live and the Active filter included them | Show and filter active links past their expiry as expired; website knows the expired status | paymentLinks/serialize.ts, query.ts, apps/web | new test; live: 10 of 11 active links were really expired |
 | 33 | Cancel another shop's link | Group chat | Matched by id only | Match id AND merchant | paymentLinks/cancel.ts | new test |
 | 82 | Stuck reserved links never expired | Website search | A crashed pay attempt left the link reserved forever; checkout showed a pay form that could not work | Reserved past expiry shows as expired (list, filter, checkout) | paymentLinks/serialize.ts, query.ts, status.ts | new test |
 
@@ -167,7 +166,7 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 
 | # | Bug | Reported in | Root cause | Fix | Files | Proof |
 |---|---|---|---|---|---|---|
-| 31 | Refund, capture and payment-link amounts typed in fils, shown in BD | You (merchant website) | The page showed BD (e.g. 10.000 BHD) but the boxes wanted fils (10000), inviting 1000x mistakes | All three boxes take BD and convert exactly with parseBhdToFils; refund checks the most you can refund and confirms the BD amount | apps/web/src/format.ts, RefundDrawer.tsx, TransactionDetailPage.tsx, PaymentLinkCreatePage.tsx | new web tests (4.75 = 4750 fils) |
+| 31 | Refund, capture and payment-link amounts typed in fils, shown in BD | Team testing the merchant website | The page showed BD (e.g. 10.000 BHD) but the boxes wanted fils (10000), inviting 1000x mistakes | All three boxes take BD and convert exactly with parseBhdToFils; refund checks the most you can refund and confirms the BD amount | apps/web/src/format.ts, RefundDrawer.tsx, TransactionDetailPage.tsx, PaymentLinkCreatePage.tsx | new web tests (4.75 = 4750 fils) |
 | 125 | Fresh browser crashed on the login page | Fresh-browser check | Local sites call their own origin but Vite had no proxy, so /v1 got index.html with status 200; the client took that as a successful null, showed the visitor as signed in, and the transactions page crashed | Vite proxy for /v1 on both sites; both API clients reject a 2xx that isn't JSON | apps/web + apps/admin vite.config.ts, api/client.ts | fresh browser reaches login; /v1 via 5173 and 5174 answers 401 JSON |
 | 83 | Transaction date filter 3 hours off | Website search | Filters used UTC midnight, not Bahrain | Filters use Bahrain day starts | apps/web format.ts, TransactionListPage.tsx | new web test |
 | 84 | Times shown in the browser's time zone | Website search | Every time on the dashboard followed the viewer's computer | Shown in Bahrain time; checkout paid time readable | apps/web format.ts, CheckoutPage.tsx | new web test (run in New York time) |
@@ -227,7 +226,7 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 | 96 | Real secrets were baked into every Docker image | Hosting review | .dockerignore didn't exclude .env files, so ops/.env.docker (bank signing secret) was copied into each image | Exclude every .env* file; secrets supplied at run time only | .dockerignore | checked the image contents before/after |
 | 99 | No production stack: no limits, restarts or health checks; Postgres port public | Hosting review | Only a dev compose existed (no resource limits, no restart policy, DB published on 5432) | docker-compose.prod.yml: exact CPU/memory budget for 1 vCPU / 2 GB, restart unless-stopped, /readyz health check, Caddy TLS edge, only 80/443 public | ops/docker-compose.prod.yml, Caddyfile, Dockerfile.web | compose + Caddyfile validated; crash test: back in ~8 s, no data lost |
 | 100 | KYC uploads would be lost on every restart | Hosting review | Uploads were written inside the container filesystem | Named volume for KYC uploads | ops/docker-compose.prod.yml | - |
-| 110 | Old Docker images and containers still held the secret files | You (env check) | Images built before the .dockerignore fix (reporting, migrate, seed) and two stopped containers contained ops/.env.docker and ops/.env.local | Rebuilt the images, recreated the reporting worker with only the 3 settings it needs, removed the stale containers; every local image scanned clean | - | image scan: 0 env files |
+| 110 | Old Docker images and containers still held the secret files | Team check of env files | Images built before the .dockerignore fix (reporting, migrate, seed) and two stopped containers contained ops/.env.docker and ops/.env.local | Rebuilt the images, recreated the reporting worker with only the 3 settings it needs, removed the stale containers; every local image scanned clean | - | image scan: 0 env files |
 
 ## Capacity
 
@@ -241,8 +240,8 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 
 | # | Bug | Reported in | Root cause | Fix | Files | Proof |
 |---|---|---|---|---|---|---|
-| 101 | Checkout, dashboard and admin console were unstyled | UI review | Browser-default inputs, plain tables, overflowing checkout row, no autofill hints, raw status names | Dark card-based theme with a red accent, readable status pills, checkout autofill and placeholders, row overflow fixed | apps/web dashboard.css, CheckoutPage.css/.tsx, apps/admin admin.css | before/after screenshots (Desktop\FilsPay UI Evidence) |
-| 109 | Login asked for a 36-character merchant ID | You (merchant website) | People had to paste a database UUID to sign in; one wrong character gave the same error as a wrong password | Email + password only. The password is checked against each account with that email; if it opens several businesses, a 'Which business?' picker sends the merchant ID behind the scenes. The ID stays in the database and API | routes/auth.ts, apps/web LoginPage.tsx, dashboardAuth.ts, types.ts | new tests (one account, several, wrong password reveals nothing); 9 locked login tests pass; browser login |
+| 101 | Checkout, dashboard and admin console were unstyled | UI review | Browser-default inputs, plain tables, overflowing checkout row, no autofill hints, raw status names | Dark card-based theme with a red accent, readable status pills, checkout autofill and placeholders, row overflow fixed | apps/web dashboard.css, CheckoutPage.css/.tsx, apps/admin admin.css | before/after screenshots |
+| 109 | Login asked for a 36-character merchant ID | Team testing the merchant website | People had to paste a database UUID to sign in; one wrong character gave the same error as a wrong password | Email + password only. The password is checked against each account with that email; if it opens several businesses, a 'Which business?' picker sends the merchant ID behind the scenes. The ID stays in the database and API | routes/auth.ts, apps/web LoginPage.tsx, dashboardAuth.ts, types.ts | new tests (one account, several, wrong password reveals nothing); 9 locked login tests pass; browser login |
 
 ## Checked and found not to be a bug
 
@@ -252,4 +251,4 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 
 * **Session token not rotated at the OTP step** (Not fixed): The pre-OTP token becomes the logged-in token. 42 locked tests reuse the pre-OTP cookie; __Host- cookies cover the cookie-planting route.
 * **Two moderate dependency advisories remain** (Not fixed): react-router open redirect; fast-uri host normalization. react-router fix is a major (6 -> 7) upgrade; fast-uri waits on Fastify.
-* **App not live on Dilmune Cloud (FP-300)** (Needs you): Needs your account.
+* **Live deployment** (Open): the stack is ready; see DEPLOY.md.
