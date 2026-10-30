@@ -4,6 +4,7 @@
  * directly deep inside dispatch logic. Same "pass the effectful dependency
  * in" shape as `AcquirerSimulator`.
  */
+import { resolvesToBlockedAddress } from "./ssrf.js";
 
 /**
  * @property timeoutMs Covers the whole exchange including reading the body (the abort
@@ -28,24 +29,51 @@ export interface WebhookTransportResponse {
 
 export type WebhookTransport = (req: WebhookTransportRequest) => Promise<WebhookTransportResponse>;
 
+/** Only an excerpt of the receiver's reply is ever stored (2000 chars), so
+ *  never read more than this from it. */
+const MAX_RESPONSE_BYTES = 64 * 1024;
+
+async function readCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  await reader.cancel().catch(() => undefined);
+  return new TextDecoder().decode(Buffer.concat(chunks).subarray(0, maxBytes));
+}
+
+export interface FetchTransportOptions {
+  /** Refuse to send to hosts that resolve to private/internal addresses
+   *  (SSRF). On in production; off in dev/test so local receivers work. */
+  blockPrivateNetworks?: boolean;
+}
+
 /** Real transport: Node's global fetch with an AbortController-driven
- *  timeout, used by index.ts's production wiring. */
-export function createFetchTransport(): WebhookTransport {
+ *  timeout, used by index.ts's production wiring. Redirects are never
+ *  followed (a 3xx counts as a failed delivery), so a receiver can't bounce
+ *  a webhook to an internal address. */
+export function createFetchTransport(options: FetchTransportOptions = {}): WebhookTransport {
   return async (req: WebhookTransportRequest): Promise<WebhookTransportResponse> => {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), req.timeoutMs);
     try {
-      // YA: create.ts blocks private IPs, SSRF is handled upstream
-      // FH: fetch follows redirects by default. claude: "set redirect: 'manual' to prevent SSRF via an open redirect"
+      if (options.blockPrivateNetworks && (await resolvesToBlockedAddress(new URL(req.url).hostname))) {
+        return { statusCode: null, body: "", errorMessage: "blocked: destination resolves to a private or internal address" };
+      }
       const response = await fetch(req.url, {
         method: "POST",
         headers: req.headers,
         body: req.body,
+        redirect: "manual",
         signal: controller.signal,
       });
-      // unbounded read, a 1gb response would oom us? — am
-      // MK: timeoutMs bounds it. fine for now, revisit after Eid inshallah
-      const body = await response.text();
+      const body = await readCapped(response, MAX_RESPONSE_BYTES);
       return { statusCode: response.status, body };
     } catch (err) {
       return {
