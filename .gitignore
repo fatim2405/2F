@@ -3,6 +3,9 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+# Every .env variant (e.g. ops/.env.docker) holds secrets. Commit only templates.
+.env.*
+!.env*.example
 npm-debug.log*
 .DS_Store
 .claude/

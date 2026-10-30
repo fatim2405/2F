@@ -22,7 +22,8 @@ each package), not services with their own database connection.
 | File | Purpose |
 |---|---|
 | `docker-compose.yml` | the stack |
-| `.env.docker` | shared service settings, loaded by compose for every service |
+| `.env.docker` | shared service settings. **Not committed** (it holds secrets): copy `.env.docker.example` to `.env.docker` and fill in the sandbox acquirer secret |
+| `.env.docker.example` | template for `.env.docker`, no real secrets |
 | `Dockerfile.node` | image for api, reporting, migrate and seed (`node:20`, full install) |
 | `Dockerfile.go` | multi-stage build of `apps/settlement` |
 
