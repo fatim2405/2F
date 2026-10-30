@@ -68,6 +68,11 @@ export async function replayWebhookDeliveriesBatch(
       throw new ConflictError("endpoint_disabled");
     }
 
+    // Only the LATEST delivery of each event is a candidate. Replays are new
+    // webhook_deliveries rows for the same outbox event, so without this an
+    // event whose original and earlier replay both failed was resent twice
+    // (the merchant got duplicates), an event already replayed successfully
+    // was resent again, and each batch run grew the next one.
     const candidates = await client.query<{
       id: string;
       endpoint_id: string;
@@ -75,11 +80,17 @@ export async function replayWebhookDeliveriesBatch(
       event_type: string;
       payload: Record<string, unknown>;
     }>(
-      `SELECT id, endpoint_id, outbox_event_id, event_type, payload
-         FROM webhook_deliveries
-        WHERE endpoint_id = $1 AND status = ANY($2)
-          AND created_at >= $3 AND created_at < $4
-        ORDER BY created_at ASC
+      `SELECT d.id, d.endpoint_id, d.outbox_event_id, d.event_type, d.payload
+         FROM webhook_deliveries d
+        WHERE d.endpoint_id = $1 AND d.status = ANY($2)
+          AND d.created_at >= $3 AND d.created_at < $4
+          AND NOT EXISTS (
+            SELECT 1 FROM webhook_deliveries newer
+             WHERE newer.endpoint_id = d.endpoint_id
+               AND newer.outbox_event_id = d.outbox_event_id
+               AND (newer.created_at, newer.id) > (d.created_at, d.id)
+          )
+        ORDER BY d.created_at ASC
         LIMIT $5`,
       [input.endpointId, input.statuses, input.from, input.to, MAX_BATCH_SIZE],
     );

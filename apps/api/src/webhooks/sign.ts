@@ -38,6 +38,32 @@ export function signPayload(
   return { timestamp, signature: `t=${timestamp},v1=${signature}` };
 }
 
+export interface SignedBody extends SignedPayload {
+  /** the exact bytes to send as the HTTP body — the same string the
+   *  signature covers */
+  body: string;
+}
+
+/**
+ * Serializes `payload` once and signs that exact string, so the bytes sent
+ * are the bytes signed. A receiver verifying the HMAC over the raw request
+ * body (the usual way) then matches. Callers must send `body` unchanged —
+ * never re-serialize the payload for the request.
+ *
+ * The body is canonicalJson, so the signature is identical to
+ * signPayload's and verifySignature keeps working for receivers that
+ * re-parse and re-sort.
+ */
+export function signBody(
+  payload: unknown,
+  secret: string,
+  timestamp: number = Math.floor(Date.now() / 1000),
+): SignedBody {
+  const body = canonicalJson(payload);
+  const mac = createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
+  return { body, timestamp, signature: `t=${timestamp},v1=${mac}` };
+}
+
 interface ParsedSignatureHeader {
   timestamp: number;
   signature: string;

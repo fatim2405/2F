@@ -3,7 +3,7 @@ import { Client, type Pool } from "pg";
 import type { Config } from "../config.js";
 import { withTransaction } from "../db/withTransaction.js";
 import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
-import { signPayload } from "./sign.js";
+import { signBody } from "./sign.js";
 import { buildEnvelope } from "./envelope.js";
 import { recordPayoutDisbursementEffect } from "./payoutDisbursement.js";
 import { WEBHOOK_DELIVERY_ID_HEADER, WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
@@ -51,11 +51,13 @@ export type DispatcherConfig = Pick<
 >;
 
 /** Exponential backoff with a cap and ±10 % jitter. attemptNumber is the
- *  attempt that just failed (1-indexed). */
+ *  attempt that just failed (1-indexed). `jitter` returns [0, 1); the
+ *  default (0.5) means no jitter, so the bare call is the nominal delay.
+ *  The dispatcher passes Math.random explicitly when scheduling a retry. */
 export function backoffDelayMs(
   attemptNumber: number,
   config: Pick<Config, "webhookBackoffBaseMs" | "webhookBackoffCapMs">,
-  jitter: () => number = Math.random,
+  jitter: () => number = () => 0.5,
 ): number {
   const raw = config.webhookBackoffBaseMs * 2 ** (attemptNumber - 1);
   const capped = Math.min(raw, config.webhookBackoffCapMs);
@@ -155,7 +157,9 @@ async function attemptOneDelivery(
 ): Promise<void> {
   const key = decodeEncryptionKey(config.webhookSecretEncryptionKey);
   const secret = decryptSecret(row.secret_ciphertext, key);
-  const { signature } = signPayload(row.payload, secret);
+  // Sign the exact bytes we send (signing one serialization and sending
+  // another made raw-body verification fail for receivers, e.g. Beta's 401s).
+  const { signature, body } = signBody(row.payload, secret);
 
   if (row.attempt_count === 0) {
     const effect = PRE_DELIVERY_EFFECTS[row.event_type];
@@ -169,7 +173,7 @@ async function attemptOneDelivery(
       [WEBHOOK_DELIVERY_ID_HEADER]: row.delivery_event_id,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(row.payload),
+    body,
     timeoutMs: config.webhookRequestTimeoutMs,
   });
 
@@ -202,7 +206,7 @@ async function attemptOneDelivery(
     return;
   }
 
-  const delayMs = backoffDelayMs(newAttemptCount, config);
+  const delayMs = backoffDelayMs(newAttemptCount, config, Math.random);
   await pool.query(
     `UPDATE webhook_deliveries
         SET attempt_count = attempt_count + 1, signature = $2,
