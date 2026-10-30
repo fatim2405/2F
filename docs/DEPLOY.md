@@ -52,6 +52,13 @@ budget and the load-test results.
    | `SETTLEMENT_INTERNAL_TOKEN` | new random value |
    | `WEBHOOK_SECRET_ENCRYPTION_KEY` | 32 random bytes, **base64** (`openssl rand -base64 32`) |
    | `ACQUIRER_CALLBACK_SIGNING_SECRET` | the value configured in the acquirer's portal |
+   | `OTP_DEV_EXPOSE` | `true` on a demo or judging server only (see below) |
+
+   **Login codes.** FilsPay has no real email or SMS sender yet, so in
+   production a login code is never delivered and nobody can sign in.
+   `OTP_DEV_EXPOSE=true` shows the code on the login screen instead. That is
+   fine for a demo server with seed data. Never use it with real merchants:
+   wire up a real sender in `apps/api/src/auth/notifier.ts` first.
 
 3. **Start the stack**
    ```bash
@@ -119,4 +126,5 @@ can't bind 80/443. Two options:
 * The acquirer signing secret in `ops/.env.prod` matches the acquirer portal.
 * Postgres is not published (only the edge has `ports`).
 * `NODE_ENV=production` (set in the compose file): secure `__Host-` cookies,
-  required callback signatures, no dev OTP codes, load shedding on.
+  required callback signatures, load shedding on. Dev OTP codes are off unless
+  `OTP_DEV_EXPOSE=true` is set, which is for demo servers only.
