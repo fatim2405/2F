@@ -286,10 +286,16 @@ export async function getReconciliationReport(
   const windowEnd = bahrainLocalMidnightUtc(input.to);
 
   const [ledgerResult, settlementResult, pendingResult, merchantResult] = await Promise.all([
+    // What the merchant earned in the window. Payout legs (the only ledger
+    // rows carrying a settlement_batch_id — batch.go's payout and the
+    // split-to-sub-merchant payout) are left out: they are what
+    // settlementNetPayoutFils already counts, so including them subtracted
+    // every payout twice and showed a false gap on any paid period.
     pool.query<{ net: string }>(
       `SELECT COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_fils ELSE -amount_fils END), 0) AS net
          FROM ledger_entries
         WHERE merchant_id = $1 AND account_id = 'merchant_payable'
+          AND settlement_batch_id IS NULL
           AND occurred_at >= $2 AND occurred_at < $3`,
       [input.merchantId, windowStart, windowEnd],
     ),

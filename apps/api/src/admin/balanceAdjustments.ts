@@ -21,7 +21,11 @@ export interface BalanceAdjustmentResult {
   cachedPayableFilsAfter: Fils;
 }
 
-/** Applies a correction to a merchant's balance record and audits it. */
+/**
+ * Cache-only: moves merchant_balances without posting to ledger_entries, so
+ * a ledger rebuild undoes it. Not for money corrections — the admin route
+ * uses adjustMerchantBalanceJournaled below.
+ */
 export async function applyBalanceCorrection(
   pool: Pool,
   input: BalanceAdjustmentInput,

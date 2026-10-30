@@ -20,6 +20,8 @@ interface ImportIdParams {
 interface CreateImportBody {
   csvContent?: unknown;
   originalFilename?: unknown;
+  /** true to post even though an identical import was applied in the last 24 h. */
+  allowDuplicate?: unknown;
 }
 
 interface ListQuery {
@@ -67,6 +69,7 @@ export async function adminAdjustmentImportRoutes(app: FastifyInstance): Promise
         adminUserId: adminAuth.adminUserId,
         originalFilename: originalFilename ?? "pasted.csv",
         rows,
+        allowDuplicate: request.body?.allowDuplicate === true,
       });
 
       reply.code(201).send(result);

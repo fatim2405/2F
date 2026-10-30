@@ -1,8 +1,9 @@
-import type { Pool } from "pg";
+import { createHash } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
 import { addFils, toFils, ZERO_FILS, type Fils } from "@filspay/money";
 import { insertAdminAuditLog } from "../adminAudit/log.js";
 import { withTransaction } from "../db/withTransaction.js";
-import { BadRequestError } from "../lib/errors.js";
+import { BadRequestError, ConflictError } from "../lib/errors.js";
 import { parseAdjustmentAmountFils } from "./adjustmentCsvParsing.js";
 import { postLedgerAdjustment } from "./ledgerAdjustments.js";
 
@@ -43,15 +44,65 @@ async function postAdjustmentToLedgerAndCache(
  * audit row is the last statement in the same transaction, so an import
  * that lands without a record of who ran it is not reachable.
  */
+/** How far back an identical upload counts as an accidental duplicate. */
+const DUPLICATE_WINDOW_HOURS = 24;
+
+/** Fingerprint of an import's rows exactly as stored in adjustment_import_rows
+ *  (merchant, raw amount text, reason, in order). Must match the SQL in
+ *  findRecentIdenticalImport. */
+function rowsFingerprint(rows: AdjustmentImportRow[]): string {
+  const text = rows.map((r) => `${r.merchantId.toLowerCase()}|${r.amount}|${r.reason ?? ""}`).join("\n");
+  return createHash("md5").update(text).digest("hex");
+}
+
+async function findRecentIdenticalImport(
+  client: PoolClient,
+  fingerprint: string,
+): Promise<{ id: string; applied_at: Date } | null> {
+  const r = await client.query<{ id: string; applied_at: Date }>(
+    `SELECT ai.id, ai.applied_at
+       FROM adjustment_imports ai
+       JOIN adjustment_import_rows r ON r.adjustment_import_id = ai.id
+      WHERE ai.applied_at > now() - make_interval(hours => $2)
+      GROUP BY ai.id, ai.applied_at
+     HAVING md5(string_agg(lower(r.merchant_id::text) || '|' || r.raw_amount_text || '|' || coalesce(r.reason, ''), E'\\n' ORDER BY r.row_number)) = $1
+      ORDER BY ai.applied_at DESC
+      LIMIT 1`,
+    [fingerprint, DUPLICATE_WINDOW_HOURS],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * @param input.allowDuplicate Post even if an identical import was applied in
+ * the last 24 h. Without it, an identical re-upload (e.g. a double-click) is
+ * refused with 409 duplicate_import.
+ */
 export async function applyAdjustmentImport(
   pool: Pool,
-  input: { adminUserId: string; originalFilename: string; rows: AdjustmentImportRow[] },
+  input: { adminUserId: string; originalFilename: string; rows: AdjustmentImportRow[]; allowDuplicate?: boolean },
 ): Promise<AdjustmentImportResult> {
   if (input.rows.length === 0) {
     throw new BadRequestError("empty_import", "the CSV must contain at least one row");
   }
 
   return withTransaction(pool, async (client) => {
+    // Every row posts real money, and there is no other undo, so an identical
+    // upload within the window is almost always an accident (4 Sep 2026: the
+    // same file applied twice, 22 s apart). The advisory lock serializes two
+    // concurrent uploads of the same content so both can't pass the check.
+    const fingerprint = rowsFingerprint(input.rows);
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`adjustment-import:${fingerprint}`]);
+    if (!input.allowDuplicate) {
+      const previous = await findRecentIdenticalImport(client, fingerprint);
+      if (previous) {
+        throw new ConflictError(
+          "duplicate_import",
+          `identical to import ${previous.id} applied at ${previous.applied_at.toISOString()}; resubmit with allowDuplicate: true if this is intended`,
+        );
+      }
+    }
+
     const importRow = await client.query<{ id: string }>(
       `INSERT INTO adjustment_imports (uploaded_by_admin_user_id, original_filename, row_count)
        VALUES ($1, $2, $3) RETURNING id`,
