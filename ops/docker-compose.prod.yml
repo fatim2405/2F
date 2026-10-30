@@ -129,8 +129,11 @@ services:
     <<: *restart
     build: { context: .., dockerfile: ops/Dockerfile.web }
     environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in ops/.env.prod}
-      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?set ADMIN_DOMAIN in ops/.env.prod}
+      # Caddy site addresses. Normally just the hostnames (Caddy then gets the
+      # TLS certificates). Behind a panel that terminates HTTPS itself, set
+      # SITE_ADDRESS / ADMIN_SITE_ADDRESS to http://<host> (see docs/DEPLOY.md).
+      DOMAIN: ${SITE_ADDRESS:-${DOMAIN:?set DOMAIN in ops/.env.prod}}
+      ADMIN_DOMAIN: ${ADMIN_SITE_ADDRESS:-${ADMIN_DOMAIN:?set ADMIN_DOMAIN in ops/.env.prod}}
     ports:
       - "80:80"
       - "443:443"
