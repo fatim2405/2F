@@ -13,9 +13,10 @@ three roles:
 You'll only see the buttons your role can use. Everything you do here is
 written to the admin audit log.
 
-Everything below is routine. None of it can break the books — balances and
-analytics are recalculated from the records underneath them, and every
-money change is logged.
+Everything below is routine, and every action is logged. Tools that move
+money post to the ledger (`ledger_entries`), which is the record of truth;
+the balances on screen are a cache of it. Read **Rebuild cached balances**
+below before using it.
 
 — YA / MK (merged from two drafts)
 
@@ -53,9 +54,12 @@ from last month, pick the effective date the credit belongs to.
 
 **Adjust balance** — when a merchant's balance on screen is wrong and support
 has confirmed the right figure (statement, phone call), enter the difference
-and a reason. The adjustment is journaled to the ledger and the dashboard
-shows the corrected balance straight away; no need to wait for the next
-settlement run.
+and a reason. The adjustment is journaled to the ledger (a balanced pair
+against `manual_balance_adjustment_contra`) and the dashboard shows the
+corrected balance straight away; no need to wait for the next settlement
+run. (Before October 2026 this button changed the on-screen cache only and
+wrote nothing to the ledger; adjustments made before then are not in the
+ledger.)
 
 **Recalculate MDR** — after a merchant's rate changes, run this over the
 date range you want the new rate applied to. Their batches are recalculated
@@ -64,9 +68,13 @@ reconciliation match what finance agreed with them.
 
 **Import adjustments** — paste a CSV of corrections with a
 `merchantId,amount,reason` header. Amounts are in BD as finance's sheets
-already have them (`4.75`, `120.00`). Rows are applied as soon as you
-submit; each import's rows are kept with the original text for reference.
-Don't submit the same file twice; there's no duplicate detection yet.
+already have them (`4.75`, `120.00`; up to three decimals, 1 BD = 1000
+fils). Rows are applied as soon as you submit; each import's rows are kept
+with the original text for reference. Uploading exactly the same rows again
+within 24 hours is refused as a likely double-click (`duplicate_import`); if a
+repeat really is intended, resubmit with `allowDuplicate: true`. (Before October 2026 amounts were read
+as two-decimal "cents", so every imported amount was posted at one tenth of
+its value — see the finance repair notes.)
 
 ## Settlement ops
 
@@ -74,19 +82,30 @@ Don't submit the same file twice; there's no duplicate detection yet.
 merchant). Days that are already closed or paid are skipped, so re-running
 is always safe.
 
-**Rebuild cached balances** — refreshes every merchant's cached balance.
-Run it whenever a balance looks off or after any manual correction.
-It only rewrites the balance cache, never the ledger, so it's safe to run
-as often as you like; it asks for confirmation because it covers every
-merchant at once. The nightly recompute does the same thing at 02:00.
+**Rebuild cached balances** — rewrites every merchant's cached balance. It
+never touches the ledger, but **the figure it writes is not the ledger
+balance**: per ADR-0004 it comes from the scheme-export totals
+(`merchant_payable_position`), i.e. gross captured amounts, without fees,
+payouts or adjustments. Running it can therefore put large, wrong balances
+on screen (as on 15 Sep 2026). Until the team decides on ADR-0004, prefer
+`settlement rebuild-balances` (CLI), which rebuilds from the ledger. Don't
+"fix" a balance after this button with **Adjust balance** without checking
+the ledger first.
 
 **Rebuild analytics** — dashboards lag a little behind live activity by
 design. If they look stale, rebuild them from scratch here instead of
-waiting for the worker. Quick, safe, and repeatable.
+waiting for the worker. Quick, safe, and repeatable. If they stay stale,
+the worker may be stuck on one event it can't apply: its log names the
+event, and engineering can clear it with `reporting skip-event <id>`
+(ops/README.md).
 
 ## Webhooks
 
-> **— unsigned:** replay-batch reuses the original delivery ids, so receivers dedupe fine.
+A replay is a **new** delivery with a **new** `Webhook-Delivery-Id`, so
+receivers can't use the id to spot it as a resend; tell the merchant when you
+replay. A batch replay resends each event at most once, from its latest
+attempt (an event that already has a newer attempt is skipped), so running
+the same batch twice doesn't send everything again.
 
 **Replay a batch** — pick an endpoint, a date range, and which delivery
 statuses to resend (default: `exhausted`; any status can be chosen). Each

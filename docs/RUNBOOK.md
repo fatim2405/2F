@@ -92,11 +92,18 @@ usually needs a couple of restarts while Postgres warms up.
 >
 > **— M?** bad deploy, rolled back
 
-If a merchant reports that signatures don't verify, ask them to parse the
-body and re-serialise it with sorted keys before computing the HMAC; some
-HTTP frameworks reorder JSON keys.
+Webhook signatures cover the exact bytes of the request body
+(`HMAC-SHA256("<t>.<raw body>")`), so merchants verify over the raw body as
+received, with no re-parsing or re-sorting. (Until October 2026 the
+dispatcher signed a key-sorted copy but sent a differently ordered body, so
+raw-body verification always failed, e.g. Beta Digital's 401s; FP-240. The
+old advice to re-serialise with sorted keys still works but is no longer
+needed.) After deploying that fix, replay merchants' `exhausted` deliveries
+from the admin console.
 
-> **MK:** if signatures don't verify over the raw body, that's on us. FP-240
+If a merchant still reports signatures not verifying, check they use the
+endpoint's current secret and don't let a framework parse and re-encode the
+body before they verify it.
 
 ## Scheme file for a batch
 
