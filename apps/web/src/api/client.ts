@@ -46,6 +46,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       : { ...init?.headers },
   });
   const body = await res.json().catch(() => null);
+  // A 2xx that isn't JSON is not a success: a misrouted request gets an HTML
+  // page with status 200, and treating that as data showed a logged-out
+  // visitor as signed in, then crashed the dashboard on a null response.
+  if (res.ok && body === null && res.status !== 204) {
+    throw new ApiError(502, { error: "invalid_api_response", message: "The server sent an unexpected response." });
+  }
   if (!res.ok) {
     throw new ApiError(res.status, (body as ApiErrorBody) ?? { error: "unknown_error" });
   }

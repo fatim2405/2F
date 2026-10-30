@@ -6,8 +6,8 @@ so the two always agree.
 
 | | Count |
 |---|---|
-| Found | 123 |
-| Fixed | 119 |
+| Found | 125 |
+| Fixed | 121 |
 | Checked: not a bug | 1 |
 | Open | 3 |
 
@@ -168,6 +168,7 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 | # | Bug | Reported in | Root cause | Fix | Files | Proof |
 |---|---|---|---|---|---|---|
 | 31 | Refund, capture and payment-link amounts typed in fils, shown in BD | You (merchant website) | The page showed BD (e.g. 10.000 BHD) but the boxes wanted fils (10000), inviting 1000x mistakes | All three boxes take BD and convert exactly with parseBhdToFils; refund checks the most you can refund and confirms the BD amount | apps/web/src/format.ts, RefundDrawer.tsx, TransactionDetailPage.tsx, PaymentLinkCreatePage.tsx | new web tests (4.75 = 4750 fils) |
+| 125 | Fresh browser crashed on the login page | Fresh-browser check | Local sites call their own origin but Vite had no proxy, so /v1 got index.html with status 200; the client took that as a successful null, showed the visitor as signed in, and the transactions page crashed | Vite proxy for /v1 on both sites; both API clients reject a 2xx that isn't JSON | apps/web + apps/admin vite.config.ts, api/client.ts | fresh browser reaches login; /v1 via 5173 and 5174 answers 401 JSON |
 | 83 | Transaction date filter 3 hours off | Website search | Filters used UTC midnight, not Bahrain | Filters use Bahrain day starts | apps/web format.ts, TransactionListPage.tsx | new web test |
 | 84 | Times shown in the browser's time zone | Website search | Every time on the dashboard followed the viewer's computer | Shown in Bahrain time; checkout paid time readable | apps/web format.ts, CheckoutPage.tsx | new web test (run in New York time) |
 | 85 | Checkout said 'does not exist' on any error | Website search | A server or network error looked like a missing link | Only a 404 says not found; other errors say try again | apps/web CheckoutPage.tsx | typecheck |
@@ -232,7 +233,8 @@ assert the old wrong answers (4 CSV amounts that were 10x too small, and the
 
 | # | Bug | Reported in | Root cause | Fix | Files | Proof |
 |---|---|---|---|---|---|---|
-| 97 | Checkout throughput capped at ~9/s by a 5-connection pool | Load test | A checkout holds its DB connection while waiting on the acquirer, so 5 connections allowed ~10 checkouts/s and everything else queued (p95 6 s) | Pool 20 and in-flight cap 40 in production (measured) | ops/docker-compose.prod.yml | k6: 9.2/s, p95 6.0 s -> 25.4/s, p95 1.1 s |
+| 97 | Checkout throughput capped at ~9/s by a 5-connection pool | Load test | A checkout holds its DB connection while waiting on the acquirer, so 5 connections allowed ~10 checkouts/s and everything else queued (p95 6 s) | Pool 20 and in-flight cap 40 in production (measured) | ops/docker-compose.prod.yml | k6 with Postgres unlimited: 9.2/s, p95 6.0 s -> 25.4/s, p95 1.1 s (see CAPACITY.md for the real CPU split) |
+| 124 | Every checkout scanned the whole ledger | Load test at the real CPU split | The ledger balance trigger sums by entry_group_id and capture updates holds by transaction_id; neither had an index (12,549 scans over 618 million ledger rows) | Indexes on ledger_entries(entry_group_id), ledger_entries(transaction_id), holds(transaction_id) | db/migrations/0080 | pg_stat: ledger index scans 0 to 8,564; 11.9 checkouts/s at 0.5 + 0.30 vCPU, was 10.4 |
 | 98 | No load shedding: overload made every request slow | Load test | All excess requests queued behind the pool | Past the in-flight cap, 503 + Retry-After before any work; 30 s request timeout; health probes never shed | plugins/loadShedding.ts, app.ts, config.ts | new test + k6 (0 wrong answers under 70 req/s) |
 
 ## UI/UX

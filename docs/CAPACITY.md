@@ -4,41 +4,65 @@ Measured on 30 October 2026 with the checkout scenario in
 `scripts/loadtest/checkout.k6.js`. Each iteration is one customer opening a
 payment link (`GET /v1/payment-links/:token`) and paying it
 (`POST /v1/payment-links/:token/pay`). The API container was held to the
-brief's limits: **0.5 vCPU, 512 MB** (`docker run --cpus 0.5 --memory 512m`),
+brief's limits: **0.5 vCPU, 512 MB** (`docker run --cpus 0.5 --memory 512m`) and
+Postgres to its share of the server: **0.30 vCPU, 640 MB**,
 `NODE_ENV=production`, with the simulated acquirer at its default 100–400 ms
 per call and failures switched off (so every non-200 is our behaviour, not the
 bank's).
 
 ## Our estimate
 
-**About 25 completed checkouts per second (~1,500 per minute)**, with a median
-checkout of **0.7 s** and p95 of **1.1 s**. About 0.5 s of that is the
-simulated acquirer itself (two calls per checkout), so the API adds roughly
-0.2 s. Offered load above roughly 30 checkouts/s is turned away with
-`503 overloaded` + `Retry-After: 1` instead of slowing everyone down.
+**About 6 completed checkouts per second sustained (~360 per minute)**, with a
+median payment of 0.55 s and p95 of 0.79 s, of which about 0.5 s is the simulated
+acquirer. Above that it still takes money correctly, up to about 12 checkouts/s
+at the peak, but p95 rises to about 4 s. Past that, excess load is turned away
+with `503 overloaded` + `Retry-After: 1`.
 
-Caveat: Postgres was not CPU-limited in this run. On the target server it
-shares the single vCPU (0.30 in `ops/docker-compose.prod.yml`), so the real
-figure may be lower. Re-run the same script on the server before quoting it.
+Translating to users: at one checkout per user every 30 seconds, 6/s is about
+180 active users. Replace the 30 s with the fixed scenario's own pacing.
+
+These figures come from Docker Desktop on a Windows laptop, not the target
+server. Re-run the same script on the server before treating them as final.
+
+**Correction.** An earlier version of this document said 25 checkouts/s. That
+was measured with Postgres unlimited, so it was the API's limit, not the
+server's. Limiting Postgres to its real share also exposed the missing indexes
+(finding 124).
 
 ## Results
 
-Ramp: 10 → 20 → 30 → 45 → 70 → 10 arrivals per second, 30 s each.
+All at API 0.5 vCPU / 512 MB, pool 20, cap 40, with migration 0080 unless noted.
 
-| Setting | Checkouts paid/s | Median | p95 | Wrong answers (5xx other than 503, bad 4xx) |
-|---|---|---|---|---|
-| Before: pool 5, no shedding cap tuned (64) | 9.2 | 5.4 s | 6.0 s | 0 |
-| **After: pool 20, cap 40** | **25.4** | **0.71 s** | **1.10 s** | **0** |
+| Postgres limit | Offered load | Paid/s | Median | p95 | Shed (503) | Wrong answers |
+|---|---|---|---|---|---|---|
+| **0.30 vCPU** | **steady 6/s** | **6.0** | **0.55 s** | **0.79 s** | **0** | **0** |
+| 0.30 vCPU | steady 8/s | 7.9 | 0.59 s | 4.1 s | 2 | 0 |
+| 0.30 vCPU | steady 10/s | 9.2 | 0.72 s | 4.9 s | 43 | 0 |
+| 0.30 vCPU | ramp to 70/s | 11.9 | 2.6 s | 4.1 s | 3,326 | 0 |
+| 0.30 vCPU, no indexes | ramp to 70/s | 10.4 | 3.0 s | 4.0 s | 3,569 | 0 |
+| 0.45 vCPU | steady 8/s | 7.9 | 0.55 s | 0.76 s | 0 | 0 |
+| 0.45 vCPU | steady 12/s | 11.9 | 0.58 s | 2.1 s | 0 | 0 |
+| 0.45 vCPU | ramp to 70/s | 14.3 | 2.0 s | 3.1 s | 2,898 | 0 |
+| unlimited | ramp to 70/s | 25.4 | 0.71 s | 1.1 s | - | 0 |
+| unlimited, old pool 5, cap 64 | ramp to 70/s | 9.2 | 5.4 s | 6.0 s | - | 0 |
 
-Why "before" was slow: a checkout keeps its database connection while it
-waits on the acquirer (capture holds the transaction row lock across the
-call), so 5 connections allowed about 10 checkouts/s. Everything else queued.
-Connections are cheap here (they mostly wait on the network), so the pool is
-now 20 and the in-flight cap 40, which keeps the queue short.
+The Median and p95 columns are for payments that were accepted.
 
-Money check after both runs (6,296 checkouts): 6,296 paid links, 6,296 captured
-transactions, no link with two transactions, every ledger entry group
-balanced, total captured exactly 6,296 × 4.750 BD.
+## Where the bottleneck is
+
+**Postgres CPU.** Raising only Postgres from 0.30 to 0.45 vCPU moved the clean
+sustained rate from about 6/s to about 8/s; with Postgres unlimited the API
+reached 25/s on the same 0.5 vCPU. A second limit sits behind it: a checkout
+holds its database connection while waiting on the acquirer, so connections
+were the first ceiling (9.2/s with pool 5).
+
+`pg_stat_user_tables` showed the waste: 12,549 full scans of `ledger_entries`
+(618 million rows read, zero index use), from the balance trigger, and 3,137 of
+`holds`. Migration 0080 added the indexes. Every checkout got cheaper and no
+longer slows down as the ledger grows.
+
+Money check after the final runs: 21,206 paid links = 21,206 captured
+transactions, and every ledger entry group balanced.
 
 ## Overload and recovery
 
@@ -88,7 +112,8 @@ balanced, total captured exactly 6,296 × 4.750 BD.
 docker exec ops-postgres-1 psql -U filspay -d postgres -c "CREATE DATABASE filspay_loadtest"
 DATABASE_URL=.../filspay_loadtest npm run migrate
 DATABASE_URL=.../filspay_loadtest npx tsx scripts/loadtest/prepare-checkout.ts 8000
-# start the API with --cpus 0.5 --memory 512m, then:
+docker update --cpus 0.30 --memory 640m --memory-swap 640m ops-postgres-1
+# start the API with --cpus 0.5 --memory 512m, then (add -e RATE=6 for a steady rate):
 docker run --rm -i --network ops_default -e BASE_URL=http://<api>:3000 \
   -v "$PWD/scripts/loadtest:/lt" -w /lt grafana/k6:0.54.0 run /lt/checkout.k6.js
 ```

@@ -101,6 +101,8 @@ services:
     <<: [*restart, *env]
     build: { context: .., dockerfile: ops/Dockerfile.go }
     command: ["/settlement", "daemon"]
+    # SIGTERM lets an in-flight batch finish; each batch is one transaction.
+    stop_grace_period: 120s
     environment:
       DATABASE_URL: postgres://filspay:${POSTGRES_PASSWORD}@postgres:5432/filspay?sslmode=disable
       PGCONN_SETTLEMENT: postgres://filspay:${POSTGRES_PASSWORD}@postgres:5432/filspay?sslmode=disable

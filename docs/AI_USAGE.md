@@ -9,7 +9,11 @@ counts until it is checked against the code, a test, or the running system.**
 | File | What it does |
 |---|---|
 | `CLAUDE.md` | Project rules the assistant reads first: money is integer fils (`parseBhdToFils`, never `parseFloat`), the Go settlement service is the reference for fees, Bahrain business days, never edit locked tests (add `*.new.test.ts`), never touch `packages/money`, run the full suite before calling anything done. |
-| `.claude/settings.json` | Shared assistant settings: it may not read the real secret files (`ops/.env.docker`, `ops/.env.local`, `ops/.env.prod`). |
+| `AGENTS.md` | Conventions for any coding agent. |
+| `.claude/settings.json` | Permission rules: no reading the real secret files, no editing `packages/money`, no force push, and commit/push must be confirmed. |
+| `.claude/commands/` | Custom commands: `/test-all`, `/fix-bug`, `/load-test`, `/verify-site`. Written at the end of the project to capture the routine we had been following by hand. |
+| `scripts/demo/refund-demo.js` | Helper script: drives a full and a partial refund through the real websites and saves the screenshots. |
+| `scripts/loadtest/` | Load test script and data setup. |
 | `ops/run-tests.sh` | The one command the assistant (and we) run after every change: every package on its own fresh, migrated test database. |
 
 ## How we checked the AI's output
@@ -75,6 +79,18 @@ formula, per `CLAUDE.md`) both record **2,406**.
 write failing, which is a server error. We removed `23514` from the mapping,
 validated the webhook `status` value in code instead, and re-ran. All admin
 tests passed again (41/41).
+
+### 4. Our own capacity number was wrong
+
+> **Assistant:** "about **25 checkouts per second** on the brief's 0.5 vCPU."
+
+> **Check:** the note in CAPACITY.md said Postgres had not been limited. Running
+> the test with Postgres at its real 0.30 vCPU gave 10.4/s with a p95 of 4 s.
+
+**What we did:** corrected the figure to 6/s sustained, and looked at why.
+`pg_stat_user_tables` showed 618 million ledger rows read by sequential scans,
+so we added the missing indexes (migration 0080). Lesson: a number is only as
+good as the limits it was measured under.
 
 ## Earlier AI use we found in the codebase
 

@@ -19,8 +19,14 @@ const shed = new Counter("checkouts_shed_503");
 const wrong = new Rate("checkouts_wrong"); // 5xx other than 503, or an unexpected 4xx
 const payLatency = new Trend("pay_latency_accepted", true);
 
+// RATE=<n> runs a steady n checkouts/s for 60 s instead of the ramp, to measure
+// latency at a sustained load.
+const RATE = Number(__ENV.RATE || 0);
+
 export const options = {
-  scenarios: {
+  scenarios: RATE ? {
+    steady: { executor: "constant-arrival-rate", rate: RATE, timeUnit: "1s", duration: "60s", preAllocatedVUs: 60, maxVUs: 200 },
+  } : {
     ramp: {
       executor: "ramping-arrival-rate",
       startRate: 5,
