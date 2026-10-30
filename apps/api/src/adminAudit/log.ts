@@ -38,7 +38,8 @@ export interface AdminAuditEntry {
    *  which has no single target. */
   targetId?: string | null;
   metadata?: Record<string, unknown>;
-  outcome?: "succeeded" | "failed";
+  /** "started" for a cross-process action logged before its call (0079). */
+  outcome?: "started" | "succeeded" | "failed";
 }
 
 /**

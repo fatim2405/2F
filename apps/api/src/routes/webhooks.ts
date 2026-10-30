@@ -4,7 +4,7 @@ import {
   requireMerchantRole,
   requireMerchantWriterActor,
 } from "../auth/requireMerchantAuth.js";
-import { BadRequestError, ForbiddenError, NotFoundError } from "../lib/errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError, ConflictError } from "../lib/errors.js";
 import { createWebhookEndpoint } from "../webhooks/create.js";
 import { getWebhookEndpoint, listWebhookEndpoints } from "../webhooks/list.js";
 import { deleteWebhookEndpoint } from "../webhooks/cancel.js";
@@ -110,6 +110,12 @@ export async function webhookEndpointRoutes(app: FastifyInstance): Promise<void>
         merchantId: request.params.merchantId,
         id: request.params.id,
       });
+      if (result === "has_deliveries") {
+        throw new ConflictError(
+          "webhook_endpoint_has_deliveries",
+          "This endpoint has delivery history, so it can't be deleted. Disable it instead.",
+        );
+      }
       if (result === "not_found") {
         throw new NotFoundError("webhook_endpoint_not_found");
       }

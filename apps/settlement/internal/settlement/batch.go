@@ -139,6 +139,9 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: read platform volume: %w", err)
 	}
 	tierBonusBps := VolumeTierMdrBonusBps(platformProcessedFils)
+	if !VolumeTierEnabled() {
+		tierBonusBps = 0 // until finance signs off on the tier
+	}
 
 	// Step 6: select and lock eligible events for the whole window. The
 	// join is transaction_events (many) -> transactions (one) — the safe
@@ -216,13 +219,61 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 		batchGross += grossForTxn
 		batchFee += feeForTxn
 	}
+
+	// Step 8b: net refunds out of the payout. Refunds used to be ignored
+	// here, so a refunded payment was still paid out in full (and its fee
+	// reversal on top). A refund event carries a negative amount_fils and the
+	// fee reversed in metadata.feeReversedFils, exactly what processRefund
+	// posted to the ledger. Unbatched refunds up to the end of this window are
+	// included (so one made after its capture's batch was paid is deducted
+	// from the next batch), in time order, only while the payout stays >= 0;
+	// the rest wait for a later batch. Scheme lines and platform volume stay
+	// capture-only.
+	refundRows, err := tx.Query(ctx, `
+		SELECT te.id, te.amount_fils, COALESCE((te.metadata->>'feeReversedFils')::bigint, 0)
+		  FROM transaction_events te
+		  JOIN transactions t ON t.id = te.transaction_id
+		 WHERE t.merchant_id = $1
+		   AND te.event_type IN ('refunded', 'refund_partial')
+		   AND te.settlement_batch_id IS NULL
+		   AND te.occurred_at < $2
+		 ORDER BY te.occurred_at, te.id
+		 FOR UPDATE OF te
+	`, merchantID, end)
+	if err != nil {
+		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: select refund events: %w", err)
+	}
+	var refundGross, refundFeeReversed money.Fils
+	for refundRows.Next() {
+		var id, amountFils, feeReversed int64
+		if err := refundRows.Scan(&id, &amountFils, &feeReversed); err != nil {
+			refundRows.Close()
+			return BatchResult{}, fmt.Errorf("settlement: CloseBatch: scan refund event: %w", err)
+		}
+		nextGross := refundGross + money.Fils(amountFils)
+		nextReversed := refundFeeReversed + money.Fils(feeReversed)
+		if NetPayableFils(batchGross+nextGross, batchFee-nextReversed) < 0 {
+			break // later refunds stay unbatched for a future batch
+		}
+		refundGross, refundFeeReversed = nextGross, nextReversed
+		eventIDs = append(eventIDs, id)
+	}
+	if err := refundRows.Err(); err != nil {
+		refundRows.Close()
+		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: iterate refund events: %w", err)
+	}
+	refundRows.Close()
+
+	capturedGross := batchGross
+	batchGross += refundGross
+	batchFee -= refundFeeReversed
 	netPayout := NetPayableFils(batchGross, batchFee)
 
 	// Record this batch's contribution to the platform-wide lifetime
 	// processed-volume counter, in the same transaction that freezes this
 	// batch's own totals — so the counter and the batch it describes
 	// commit or roll back together.
-	if err := RecordPlatformProcessedVolume(ctx, tx, platformProcessedFils, int64(batchGross)); err != nil {
+	if err := RecordPlatformProcessedVolume(ctx, tx, platformProcessedFils, int64(capturedGross)); err != nil {
 		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: record platform volume: %w", err)
 	}
 
@@ -252,7 +303,7 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 		_, err = tx.Exec(ctx, `
 			INSERT INTO scheme_export_lines (settlement_batch_id, transaction_id, amount_fils, amount, line_sequence)
 			VALUES ($1, $2, $3, $4, $5)
-		`, batchID, line.transactionID, int64(truncated), SchemeAmountBD(line.grossFils), i+1)
+		`, batchID, line.transactionID, int64(truncated), SchemeAmountBD(truncated), i+1)
 		if err != nil {
 			return BatchResult{}, fmt.Errorf("settlement: CloseBatch: insert scheme export line: %w", err)
 		}

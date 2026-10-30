@@ -6,6 +6,7 @@ package splits
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -103,6 +104,24 @@ func PayoutSplitBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) 
 		return SplitPayoutResult{}, err
 	}
 	rows.Close()
+
+	// Each share above is rounded on its own, and the weights aren't
+	// guaranteed to total 10000 (only the seed checks it). Whatever didn't get
+	// allocated was never posted anywhere, yet the batch was marked paid: the
+	// "missing fils" in Delta Marketplace's splits. Require full weights and
+	// give the rounding remainder to the last child so the shares sum exactly.
+	if len(shares) > 0 {
+		var weightSum int64
+		var allocated money.Fils
+		for _, s := range shares {
+			weightSum += s.WeightBps
+			allocated += s.AllocatedFils
+		}
+		if weightSum != 10000 {
+			return SplitPayoutResult{}, fmt.Errorf("splits: child weights for merchant %s sum to %d bps, want 10000", parentMerchantID, weightSum)
+		}
+		shares[len(shares)-1].AllocatedFils += money.Fils(netPayout) - allocated
+	}
 
 	var totalAllocated money.Fils
 	for _, s := range shares {

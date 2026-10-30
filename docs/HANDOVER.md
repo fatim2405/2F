@@ -79,3 +79,35 @@ ever ran them, except possibly staging-2, which once ran a branch.
 - The acquirer integration contact has changed; ask Mahmood.
 
 Good luck. Yalla.
+
+---
+
+## Status check, 2026-10-30
+
+Every claim above checked against the code on `fix/audit-fixes`. Yousif's
+text is left as written; this section says what is true now.
+
+| Item | Status now |
+|---|---|
+| **Refunds** | **Done (FP-300).** The route is `POST /v1/merchants/:merchantId/refunds`; `POST /v1/refunds` still answers 501 on purpose (it points to the new path). Refunds now lock the payment, can't exceed what was captured, reverse the fee net of discount, are netted out of the next settlement payout, send a `refund.succeeded` webhook, appear in reporting (0076) and reconciliation, and show in the timeline. |
+| **Scheme residue** | **Still not posted automatically.** `amount_3dp` is gone (see MK). The export line's BD amount was being rounded up from the untruncated gross; it now comes from the truncated fils and 0075 repaired old lines, so the scheme file no longer reads a few fils high. Posting residue inside CloseBatch is still undone. |
+| **Verify residue with Visa** | **Open.** A question for the acquirer; nothing in code. |
+| **March close (FP-187)** | Labelled wrong: FP-187 is the expired payment link bug (fixed: expiry now uses the server clock). The March script (`scripts/reconcile_march.ts`) was not idempotent and posted the residue again on every run; it now skips merchants already swept and takes an advisory lock. Its month window is still UTC, not the Bahrain month asked for above. |
+| **Balances** | **Wrong when found:** a console button existed and read `merchant_payable_position`, not the ledger (FP-203, 135K → 7K). It now uses the same ledger rebuild as the CLI, in one aggregate query, with `merchant_balances` locked. |
+| **Platform volume tier** | **Was wrong; now true.** The tier was live in settlement and capture (15 bps off above 2,000,000 BD) with no sign-off on record, and its INTEGER counter wrapped negative past 2,147,483,647 fils. Fixed: BIGINT (0077) and int64. Decided 2026-10-30: **the tier is off** until finance signs off in writing. Capture, settlement and reconciliation apply it only when `FILSPAY_PLATFORM_VOLUME_TIER_ENABLED=true`. |
+| **`apps/api/src/v1/`** | Unchanged. |
+| **Webhook signing** | **Done.** The dispatcher signs the exact bytes it sends. (Branch `ya/sign-raw` is not in this repository.) |
+| **Holds** | **Was wrong; now true.** `scripts/expire_holds.ts` deleted expired holds. Decided 2026-10-30: holds are never deleted. The nightly job now marks still-active holds past `expires_at` as `expired`, re-checking both in the UPDATE itself. (The old delete builder is kept only because locked tests import it.) An empty id list also no longer deletes every hold. |
+| **Timezone** | **Done.** The daemon's "yesterday" is now the Bahrain date, and the daily close no longer runs three hours late. |
+| **Impersonation** | **Was wrong; now true.** The code mapped finance→finance and super_admin→owner, and some merchant write routes had no role check. Decided 2026-10-30 to follow this note: every admin now impersonates as `support`, and `requireMerchantAuth` refuses every non-GET/HEAD/OPTIONS request on a grant (403). |
+| **Credits** | Not re-checked in this audit. |
+| **Callbacks** | **Wrong.** Acquirer callback notes were not deduplicated (FP-201 reopened). Fixed: unique index on `callback_id` (0074) plus `ON CONFLICT DO NOTHING`. Incoming signatures are now required in production, must be under 5 minutes old, are compared timing-safely, and are checked over the raw request bytes (they were checked over a re-serialized body). |
+| **Not finished** | Still not done: per-service DB roles and TLS, commit-order outbox consumption, shadow ledger. |
+| **Migration gaps** | Fresh databases now migrate cleanly (0054/0055 fixed). New since: 0073–0078. |
+
+Also still open from the audit (not in Yousif's list): Dilmune Cloud
+hosting. (Capture now computes the negotiated-discount fee itself, with
+settlement's formula; payment-link checkout used to skip the discount.) The leaked acquirer
+signing secret was replaced on 2026-10-30; the bank portal must hold the same
+new value.
+The full list is in the bug tracker spreadsheet.

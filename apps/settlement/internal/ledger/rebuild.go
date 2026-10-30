@@ -5,11 +5,9 @@ package ledger
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/filspay/settlement/internal/money"
@@ -61,52 +59,60 @@ func RebuildAllBalances(ctx context.Context, db *pgxpool.Pool) (map[uuid.UUID]Re
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	rows, err := tx.Query(ctx, `
-		SELECT DISTINCT merchant_id FROM (
-			SELECT merchant_id FROM ledger_entries WHERE account_id = 'merchant_payable'
-			UNION
-			SELECT merchant_id FROM merchant_balances
-		) merchants
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("ledger: RebuildAllBalances: select merchant ids: %w", err)
+	// Block concurrent writers to the cache (CloseBatch/payout increments)
+	// for the duration, so an increment landing mid-rebuild isn't clobbered
+	// by the absolute value written below. Readers are unaffected.
+	if _, err := tx.Exec(ctx, `LOCK TABLE merchant_balances IN EXCLUSIVE MODE`); err != nil {
+		return nil, fmt.Errorf("ledger: RebuildAllBalances: lock merchant_balances: %w", err)
 	}
 
-	var merchantIDs []uuid.UUID
+	// Every merchant's ledger balance in one aggregate pass, instead of one
+	// SUM query per merchant (the per-merchant walk was what made this too
+	// slow for the console button; ADR-0004).
+	rows, err := tx.Query(ctx, `
+		SELECT m.merchant_id,
+		       COALESCE(l.payable, 0) AS rebuilt,
+		       COALESCE(b.cached_payable_fils, 0) AS cached_before
+		  FROM (
+		        SELECT merchant_id FROM ledger_entries WHERE account_id = 'merchant_payable'
+		        UNION
+		        SELECT merchant_id FROM merchant_balances
+		       ) m
+		  LEFT JOIN (
+		        SELECT merchant_id, SUM(CASE WHEN direction = 'credit' THEN amount_fils ELSE -amount_fils END) AS payable
+		          FROM ledger_entries
+		         WHERE account_id = 'merchant_payable'
+		         GROUP BY merchant_id
+		       ) l ON l.merchant_id = m.merchant_id
+		  LEFT JOIN merchant_balances b ON b.merchant_id = m.merchant_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("ledger: RebuildAllBalances: aggregate balances: %w", err)
+	}
+
+	type computed struct {
+		merchantID   uuid.UUID
+		rebuilt      int64
+		cachedBefore int64
+	}
+	var all []computed
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var c computed
+		if err := rows.Scan(&c.merchantID, &c.rebuilt, &c.cachedBefore); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("ledger: RebuildAllBalances: scan merchant id: %w", err)
+			return nil, fmt.Errorf("ledger: RebuildAllBalances: scan balance: %w", err)
 		}
-		merchantIDs = append(merchantIDs, id)
+		all = append(all, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("ledger: RebuildAllBalances: iterate merchant ids: %w", err)
+		return nil, fmt.Errorf("ledger: RebuildAllBalances: iterate balances: %w", err)
 	}
 	rows.Close()
 
-	// TODO: lock merchant_balances rows first, a concurrent CloseBatch increment gets clobbered -- YA
-	diffs := make(map[uuid.UUID]RebuildDiff, len(merchantIDs))
+	diffs := make(map[uuid.UUID]RebuildDiff, len(all))
 
-	for _, merchantID := range merchantIDs {
-		var cachedBefore int64
-		err := tx.QueryRow(ctx, `
-			SELECT COALESCE(cached_payable_fils, 0) FROM merchant_balances WHERE merchant_id = $1
-		`, merchantID).Scan(&cachedBefore)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("ledger: RebuildAllBalances: read cached balance for %s: %w", merchantID, err)
-		}
-
-		var rebuilt int64
-		err = tx.QueryRow(ctx, `
-			SELECT COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_fils ELSE -amount_fils END), 0)
-			  FROM ledger_entries
-			 WHERE merchant_id = $1 AND account_id = 'merchant_payable'
-		`, merchantID).Scan(&rebuilt)
-		if err != nil {
-			return nil, fmt.Errorf("ledger: RebuildAllBalances: recompute balance for %s: %w", merchantID, err)
-		}
+	for _, c := range all {
+		merchantID, rebuilt, cachedBefore := c.merchantID, c.rebuilt, c.cachedBefore
 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO merchant_balances (merchant_id, cached_payable_fils, updated_at)

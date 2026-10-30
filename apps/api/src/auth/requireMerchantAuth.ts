@@ -86,6 +86,11 @@ export const requireMerchantAuth: preHandlerHookHandler = async (request: Fastif
   if (impersonationToken) {
     const grant = await lookupImpersonationGrant(request.server.db, impersonationToken);
     if (grant) {
+      // Impersonation is view-only. Role gates alone don't guarantee that:
+      // some merchant write routes have no role check at all.
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+        throw new ForbiddenError("forbidden", "impersonation is read-only");
+      }
       request.merchantAuth = {
         merchantId: grant.merchantId,
         actorType: "admin_impersonation",

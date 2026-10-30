@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import { registerSecurityHeaders } from "./plugins/securityHeaders.js";
+import { registerLoadShedding } from "./plugins/loadShedding.js";
 import type { Pool } from "pg";
 import type { Config } from "./config.js";
 import { createAcquirerSimulator } from "./acquirer/simulator.js";
@@ -40,7 +42,11 @@ export interface BuildAppOptions {
  * tests use `app.inject(...)` against this — no real socket needed.
  */
 export function buildApp(config: Config, pool: Pool, options: BuildAppOptions = {}): FastifyInstance {
-  const app = Fastify({ logger: true });
+  // requestTimeout: a request still running after 30 s is cut off rather than
+  // holding a slot (and a pool connection) forever under overload.
+  const app = Fastify({ logger: true, requestTimeout: 30_000 });
+  registerLoadShedding(app, config.maxInflightRequests);
+  registerSecurityHeaders(app, config.corsAllowedOrigins);
 
   app.decorate("db", pool);
   app.decorate("config", config);

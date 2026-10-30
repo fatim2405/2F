@@ -13,6 +13,8 @@ export interface Config {
   databaseUrl: string;
 
   pgPoolMax: number;
+  /** Requests processed at once before the API answers 503 (0 = no cap). See plugins/loadShedding.ts. */
+  maxInflightRequests: number;
   pgPoolMin: number;
   pgPoolIdleTimeoutMs: number;
   pgPoolConnectionTimeoutMs: number;
@@ -204,6 +206,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl,
 
     pgPoolMax: parseIntEnv(env.PG_POOL_MAX, 5),
+    maxInflightRequests: parseIntEnv(env.MAX_INFLIGHT_REQUESTS, nodeEnv === "production" ? 64 : 0),
     pgPoolMin: parseIntEnv(env.PG_POOL_MIN, 0),
     pgPoolIdleTimeoutMs: parseIntEnv(env.PG_POOL_IDLE_TIMEOUT_MS, 30_000),
     pgPoolConnectionTimeoutMs: parseIntEnv(env.PG_POOL_CONNECTION_TIMEOUT_MS, 5_000),
@@ -230,17 +233,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         ? parseIntEnv(env.ACQUIRER_RNG_SEED, 0)
         : null,
 
-    cookieName: env.COOKIE_NAME ?? "fp_sid",
+    // In production the cookie names carry the __Host- prefix: the browser then
+    // refuses any version set by another (sub)domain or without Secure/Path=/,
+    // which blocks session fixation by cookie planting. (Rotating the token at
+    // OTP would too, but 42 locked tests reuse the pre-OTP cookie.)
+    cookieName: env.COOKIE_NAME ?? (nodeEnv === "production" ? "__Host-fp_sid" : "fp_sid"),
     cookieSecure: parseBoolEnv(env.COOKIE_SECURE, nodeEnv === "production"),
 
-    adminCookieName: env.ADMIN_COOKIE_NAME ?? "fp_admin_sid",
+    adminCookieName: env.ADMIN_COOKIE_NAME ?? (nodeEnv === "production" ? "__Host-fp_admin_sid" : "fp_admin_sid"),
     adminSessionTtlHours: parseIntEnv(env.ADMIN_SESSION_TTL_HOURS, 8),
     adminPendingSessionTtlMinutes: parseIntEnv(env.ADMIN_PENDING_SESSION_TTL_MINUTES, 10),
     adminOtpTtlMinutes: parseIntEnv(env.ADMIN_OTP_TTL_MINUTES, 5),
     adminOtpCodeLength: parseIntEnv(env.ADMIN_OTP_CODE_LENGTH, 6),
     adminOtpMaxAttempts: parseIntEnv(env.ADMIN_OTP_MAX_ATTEMPTS, 5),
 
-    impersonationCookieName: env.IMPERSONATION_COOKIE_NAME ?? "fp_impersonation",
+    impersonationCookieName: env.IMPERSONATION_COOKIE_NAME ?? (nodeEnv === "production" ? "__Host-fp_impersonation" : "fp_impersonation"),
     impersonationTtlMinutes: parseIntEnv(env.IMPERSONATION_TTL_MINUTES, 15),
 
     settlementInternalUrl: env.SETTLEMENT_INTERNAL_URL ?? "http://settlement:8091",
@@ -266,6 +273,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webhookRequestTimeoutMs: parseIntEnv(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000),
 
     acquirerCallbackSigningSecret,
-    acquirerCallbackRequireSignature: parseBoolEnv(env.ACQUIRER_CALLBACK_REQUIRE_SIGNATURE, false),
+    // Unsigned acquirer callbacks are only ever acceptable outside production:
+    // the signature is the callback route's only authentication.
+    acquirerCallbackRequireSignature: parseBoolEnv(env.ACQUIRER_CALLBACK_REQUIRE_SIGNATURE, nodeEnv === "production"),
   };
 }

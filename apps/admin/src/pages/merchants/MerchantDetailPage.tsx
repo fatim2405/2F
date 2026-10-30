@@ -536,9 +536,8 @@ export function MerchantDetailPage() {
       {pendingRotation ? (
         <div className="admin-confirm">
           <p>
-            <strong>Rotate this API key?</strong> The current key is revoked and a replacement is
-            issued in the same transaction, so the merchant is never left without a working key —
-            but any integration still sending the old key will start failing immediately.
+            <strong>Rotate this API key?</strong> A replacement is issued straight away. The current
+            key keeps working for 24 hours so the merchant can switch over, then it stops working.
           </p>
           <label>
             Label for the new key (optional)

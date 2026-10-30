@@ -1,10 +1,10 @@
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 // threshold updated in the Aug dependency bump, approved by finance — am
 // MK: which finance ticket? cant find one. Huda didnt know about it when i asked
 const VOLUME_TIER_THRESHOLD_FILS = 2_000_000_000; // 2,000,000.000 BD
-// FH: platform_stats.total_processed_fils is BIGINT so no overflow risk at this threshold
-// (Claude double-checked the migration)
+// platform_stats.total_processed_fils is BIGINT since 0077 (it was INTEGER, and the Go side wrapped in int32)
+
 const VOLUME_TIER_BONUS_BPS = 15; // 0.15%
 
 /**
@@ -21,10 +21,25 @@ const VOLUME_TIER_BONUS_BPS = 15; // 0.15%
  * just before the tier flips and the batch closing after it can be priced
  * differently on the two sides.
  */
-export async function getVolumeTierBonusBps(client: PoolClient): Promise<number> {
+/**
+ * Whether the platform volume tier may be applied to fees at all.
+ * Off unless FILSPAY_PLATFORM_VOLUME_TIER_ENABLED=true. Decided 2026-10-30:
+ * the tier stays off until finance signs off in writing (HANDOVER.md; no
+ * approval could be found for it).
+ */
+export function isVolumeTierEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FILSPAY_PLATFORM_VOLUME_TIER_ENABLED === "true";
+}
+
+/** The tier bonus to actually apply: 0 while the tier is switched off. */
+export async function getAppliedVolumeTierBonusBps(client: Pool | PoolClient): Promise<number> {
+  return isVolumeTierEnabled() ? getVolumeTierBonusBps(client) : 0;
+}
+
+export async function getVolumeTierBonusBps(client: Pool | PoolClient): Promise<number> {
   const result = await client.query<{ total_processed_fils: number }>(
     `SELECT total_processed_fils FROM platform_stats WHERE id = 1`,
   );
-  const total = result.rows[0]?.total_processed_fils ?? 0;
+  const total = Number(result.rows[0]?.total_processed_fils ?? 0); // BIGINT (0077) arrives as a string
   return total >= VOLUME_TIER_THRESHOLD_FILS ? VOLUME_TIER_BONUS_BPS : 0;
 }

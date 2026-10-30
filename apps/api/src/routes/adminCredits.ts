@@ -61,6 +61,10 @@ export async function adminCreditRoutes(app: FastifyInstance): Promise<void> {
 
     scope.post<{ Params: MerchantIdParams; Body: unknown }>(
       "/merchants/:id/credits",
+      // finance/super_admin only: a credit at or under the auto-approve
+      // threshold posts to the ledger straight away, so a support login
+      // could otherwise move money (only the button was hidden).
+      { preHandler: requireAdminRole("finance", "super_admin") },
       async (request, reply) => {
         const adminAuth = request.adminAuth;
         if (!adminAuth) throw new UnauthorizedError("unauthenticated");

@@ -37,5 +37,9 @@ export function derivePublicStatus(
   // row.status === 'reserved'
   const reservedAtMs = row.reservedAt?.getTime() ?? 0;
   const stillReserved = reservedAtMs > Date.now() - reservationTimeoutSeconds * 1000;
-  return stillReserved ? "processing" : "active";
+  if (stillReserved) return "processing";
+  // A stale reservation is claimable again, but only before expiry: it used
+  // to read "active" past expiry, so checkout showed a pay form that could
+  // never succeed.
+  return row.expiresAt.getTime() <= Date.now() ? "expired" : "active";
 }

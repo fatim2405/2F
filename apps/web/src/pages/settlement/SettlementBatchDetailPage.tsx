@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getSettlementBatch, getSettlementBatchTransactions } from "../../api/settlement.js";
 import { ApiError, describeError } from "../../api/client.js";
-import { bhd, dash, dateTime } from "../../format.js";
+import { bhd, dash, dateTime, statusLabel } from "../../format.js";
 import type { SettlementBatchDetailDto, SettlementBatchTransactionDto } from "../../types.js";
 
 type LoadState =
@@ -81,16 +81,10 @@ export function SettlementBatchDetailPage() {
   }
 
   const { batch } = state;
-  const displayProgress = parseFloat((batch.grossFils / 10000).toFixed(2));
 
   return (
     <section>
       <h1>Settlement batch {batch.batchDate}</h1>
-      {batch.status === "closed" && (
-        <div className="dash-progress-bar" style={{ width: "100%", background: "#e0e0e0", height: 6, borderRadius: 3 }}>
-          <div style={{ width: `${Math.min(displayProgress, 100)}%`, background: "#2563eb", height: 6, borderRadius: 3 }} />
-        </div>
-      )}
       <p className="dash-muted">
         <code>{batch.id}</code>
       </p>
@@ -98,7 +92,7 @@ export function SettlementBatchDetailPage() {
       <dl className="dash-dl">
         <dt>Status</dt>
         <dd>
-          <span className={`dash-status dash-status-${batch.status}`}>{batch.status}</span>
+          <span className={`dash-status dash-status-${batch.status}`}>{statusLabel(batch.status)}</span>
         </dd>
         <dt>Gross</dt>
         <dd>{bhd(batch.grossFils)}</dd>

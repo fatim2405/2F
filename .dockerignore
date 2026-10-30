@@ -2,3 +2,9 @@
 **/node_modules
 **/dist
 .claude
+# Never bake secrets into an image: env files are supplied at run time
+# (compose env_file). Without this, ops/.env.docker (the acquirer signing
+# secret) was copied into every image built from this context.
+**/.env
+**/.env.*
+!**/.env*.example

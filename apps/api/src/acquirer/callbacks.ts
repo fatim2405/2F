@@ -34,10 +34,14 @@ export async function applyAcquirerCallback(pool: Pool, callback: AcquirerCallba
     throw new NotFoundError("transaction_not_found");
   }
 
+  // A redelivered callback (same callback_id) is acknowledged but not saved
+  // again (FP-201; unique index from migration 0074). This also makes the
+  // route's withCallbackRetry safe to repeat.
   await pool.query(
     `INSERT INTO acquirer_callback_notes
         (transaction_id, merchant_id, callback_id, callback_type, outcome, note, received_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (callback_id) WHERE NOT is_duplicate DO NOTHING`,
     [
       callback.transactionId,
       txnRow.merchant_id,

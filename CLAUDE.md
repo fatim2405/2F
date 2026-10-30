@@ -85,10 +85,11 @@ reference. If the code behaves differently from what the docs describe,
   (`lib/random.ts` is crypto-backed). `Math.random()` is only for
   non-security uses such as retry jitter.
 - Admin impersonation (`POST /v1/admin/merchants/:id/impersonate`) requires
-  any admin session (`requireAdminSession`), not `super_admin`. The merchant
-  role it grants follows the admin's role (support→support,
-  finance→finance, super_admin→owner); `docs/HANDOVER.md` says it should
-  always be read-only `support`. That conflict is an open team decision.
+  any admin session (`requireAdminSession`), not `super_admin`. Decided
+  2026-10-30 (following `docs/HANDOVER.md`): every admin impersonates as
+  the read-only `support` merchant role, and `requireMerchantAuth` refuses
+  any non-GET/HEAD/OPTIONS request on an impersonation grant (403
+  `forbidden`, "impersonation is read-only").
 - Merchant login: the session must belong to the exact (merchant, email)
   account whose password was verified. One email can hold accounts at
   several merchants — never re-resolve a user by email alone.

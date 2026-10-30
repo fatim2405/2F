@@ -49,16 +49,22 @@ export async function buildTransactionsExportCsv(
 }
 
 
-/** Cursor-paginated export for large date ranges. */
+/**
+ * Cursor-paginated export for large date ranges; what the export route uses,
+ * so a wide range never holds every row (or one giant string) in memory.
+ * The cursor is (occurred_at, id): paging on occurred_at alone skipped rows
+ * that shared a timestamp with the last row of a page.
+ */
 export async function streamTransactionsExportCsv(
   pool: Pool,
   filters: TransactionsExportFilters,
   write: (chunk: string) => void,
+  pageSize = 1000,
 ): Promise<void> {
   write("id,status,amount_bhd,captured_bhd,reference,occurred_at\n");
 
-  let cursor: Date | null = null;
-  const PAGE_SIZE = 1000;
+  let cursor: { occurredAt: Date; id: string } | null = null;
+  const PAGE_SIZE = pageSize;
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -69,10 +75,10 @@ export async function streamTransactionsExportCsv(
           AND ($2::timestamptz IS NULL OR occurred_at >= $2)
           AND ($3::timestamptz IS NULL OR occurred_at <  $3)
           AND ($4::text[] IS NULL OR status = ANY($4))
-          AND ($5::timestamptz IS NULL OR occurred_at > $5)
-        ORDER BY occurred_at ASC
-        LIMIT $6`,
-      [filters.merchantId, filters.from ?? null, filters.to ?? null, statusArray, cursor, PAGE_SIZE],
+          AND ($5::timestamptz IS NULL OR (occurred_at, id) > ($5, $6::uuid))
+        ORDER BY occurred_at ASC, id ASC
+        LIMIT $7`,
+      [filters.merchantId, filters.from ?? null, filters.to ?? null, statusArray, cursor?.occurredAt ?? null, cursor?.id ?? null, PAGE_SIZE],
     );
 
     for (const row of result.rows) {
@@ -80,6 +86,7 @@ export async function streamTransactionsExportCsv(
     }
 
     if (result.rows.length < PAGE_SIZE) break;
-    cursor = result.rows[result.rows.length - 1]!.occurred_at;
+    const last = result.rows[result.rows.length - 1]!;
+    cursor = { occurredAt: last.occurred_at, id: last.id };
   }
 }

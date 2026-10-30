@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { listTransactions } from "../../api/transactions.js";
 import { describeError } from "../../api/client.js";
 import { Pagination } from "../../components/Pagination.js";
-import { bhd, dash, dateTime, dayStartIso } from "../../format.js";
+import { bahrainDayStartIso, bhd, dash, dateTime, statusLabel } from "../../format.js";
 import { classNames, pluralize, truncateMiddle } from "../../utils/helpers.js";
 import type { TransactionDto, TransactionStatus } from "../../types.js";
 
@@ -25,7 +25,7 @@ const SEARCH_DEBOUNCE_MS = 300;
  * query param — nothing fetches an unfiltered page and narrows it in the
  * browser, which would both lie about the result count and break pagination.
  */
-// YA: from/to are UTC day starts, see dayStartIso
+// from/to are Bahrain business-day starts, see bahrainDayStartIso
 export function TransactionListPage() {
   const [statuses, setStatuses] = useState<TransactionStatus[]>([]);
   const [from, setFrom] = useState("");
@@ -52,8 +52,8 @@ export function TransactionListPage() {
       try {
         const result = await listTransactions({
           status: statuses.length > 0 ? statuses : undefined,
-          from: dayStartIso(from),
-          to: dayStartIso(to),
+          from: bahrainDayStartIso(from),
+          to: bahrainDayStartIso(to),
           search: search || undefined,
           limit: PAGE_SIZE,
           cursor: cursor ?? undefined,
@@ -147,7 +147,7 @@ export function TransactionListPage() {
               </td>
               <td>{dash(txn.reference)}</td>
               <td>
-                <span className={classNames("dash-status", `dash-status-${txn.status}`)}>{txn.status}</span>
+                <span className={classNames("dash-status", `dash-status-${txn.status}`)}>{statusLabel(txn.status)}</span>
               </td>
               <td>{bhd(txn.amountFils)}</td>
               <td>{bhd(txn.capturedFils)}</td>

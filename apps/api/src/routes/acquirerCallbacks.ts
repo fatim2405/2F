@@ -20,6 +20,9 @@ interface AcquirerCallbackBody {
   note?: string;
 }
 
+/** The raw JSON body of each callback request, as received. */
+const rawBodies = new WeakMap<FastifyRequest, string>();
+
 /** Header format: "t=<unix seconds>,v1=<hex hmac>". A repeated header uses the first value. */
 function getSignatureHeader(request: FastifyRequest): string | undefined {
   const header = request.headers[ACQUIRER_SIGNATURE_HEADER];
@@ -38,6 +41,18 @@ function getSignatureHeader(request: FastifyRequest): string | undefined {
  * endpoint has.
  */
 export async function acquirerCallbackRoutes(app: FastifyInstance): Promise<void> {
+  // Keep the exact bytes the acquirer signed (scoped to this plugin only).
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+    const raw = typeof body === "string" ? body : body.toString("utf8");
+    rawBodies.set(request, raw);
+    try {
+      done(null, raw.length === 0 ? {} : JSON.parse(raw));
+    } catch {
+      done(new BadRequestError("invalid_request", "body must be valid JSON"), undefined);
+    }
+  });
+
   app.post<{ Body: AcquirerCallbackBody }>("/callbacks", async (request, reply) => {
     const body = request.body ?? {};
     if (
@@ -55,10 +70,13 @@ export async function acquirerCallbackRoutes(app: FastifyInstance): Promise<void
     }
 
     const verification = verifyAcquirerCallbackSignature(
-      body,
+      rawBodies.get(request) ?? body,
       getSignatureHeader(request),
       app.config.acquirerCallbackSigningSecret,
       app.config.acquirerCallbackRequireSignature,
+      // Replay protection in production: a genuine callback captured once
+      // can't be re-sent later.
+      app.config.nodeEnv === "production" ? { toleranceSeconds: 300 } : undefined,
     );
     if (!verification.valid) {
       throw new UnauthorizedError("invalid_signature", verification.reason);

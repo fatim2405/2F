@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { request } from "../../api/client.js";
-import { describeError } from "../../api/client.js";
+import { ApiError, describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
 import { RequireRole } from "../../auth/RequireRole.js";
-import { bhd } from "../../format.js";
+import { bhd, parseBdAmountInput } from "../../format.js";
 import type { TransactionDto } from "../../types.js";
 
 interface RefundResponse {
@@ -39,8 +39,11 @@ export function RefundDrawer({ txn, onRefunded }: RefundDrawerProps) {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   const merchantId = me?.merchant.id;
+  // Only while something is left to refund: a partial capture that was fully
+  // refunded keeps the partially_captured status but has nothing left.
   const refundable =
-    txn.status === "captured" || txn.status === "partially_captured" || txn.status === "partially_refunded";
+    (txn.status === "captured" || txn.status === "partially_captured" || txn.status === "partially_refunded") &&
+    txn.capturedFils - txn.refundedFils > 0;
 
   function close(): void {
     setOpen(false);
@@ -52,18 +55,33 @@ export function RefundDrawer({ txn, onRefunded }: RefundDrawerProps) {
   async function handleRefund(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     if (!merchantId) return;
-    if (!window.confirm("Refund this transaction? The money goes back to the cardholder and cannot be recalled.")) {
+    const trimmed = amount.trim();
+    const stillRefundable = txn.capturedFils - txn.refundedFils;
+    let amountFils: number | undefined;
+    if (trimmed !== "") {
+      try {
+        amountFils = parseBdAmountInput(trimmed);
+      } catch (err) {
+        setError((err as Error).message);
+        return;
+      }
+      if (amountFils > stillRefundable) {
+        setError(`You can refund at most ${bhd(stillRefundable)}.`);
+        return;
+      }
+    }
+    const shown = bhd(amountFils ?? stillRefundable);
+    if (!window.confirm(`Refund ${shown} to the cardholder? This cannot be recalled.`)) {
       return;
     }
 
     setSubmitting(true);
     setError(null);
     try {
-      const trimmed = amount.trim();
       // Left blank, amountFils is omitted entirely and the API refunds
       // everything still refundable — its own documented default, same
       // affordance the capture form has.
-      const body = trimmed === "" ? { transactionId: txn.id } : { transactionId: txn.id, amountFils: Number(trimmed) };
+      const body = amountFils === undefined ? { transactionId: txn.id } : { transactionId: txn.id, amountFils };
 
       await request<RefundResponse>(`/v1/merchants/${encodeURIComponent(merchantId)}/refunds`, {
         method: "POST",
@@ -77,6 +95,13 @@ export function RefundDrawer({ txn, onRefunded }: RefundDrawerProps) {
       await onRefunded();
     } catch (err) {
       setError(describeError(err));
+      // A definite answer (declined, invalid, too much) is final for this key:
+      // retrying with it would only replay that answer, and a corrected amount
+      // would be refused as idempotency_key_reused. Keep the key only when the
+      // outcome is unknown (network error, 5xx), so a retry can't refund twice.
+      if (err instanceof ApiError && err.statusCode < 500) {
+        setIdempotencyKey(crypto.randomUUID());
+      }
     } finally {
       setSubmitting(false);
     }
@@ -91,17 +116,19 @@ export function RefundDrawer({ txn, onRefunded }: RefundDrawerProps) {
         {open ? (
           <form className="dash-form dash-form-inline" onSubmit={(e) => void handleRefund(e)}>
             <label>
-              Amount in fils (blank refunds everything still refundable)
+              Amount in BD (blank refunds everything still refundable)
               <input
-                type="number"
-                min={1}
-                step={1}
-                max={txn.capturedFils}
+                type="text"
+                inputMode="decimal"
+                placeholder={(txn.capturedFils - txn.refundedFils) > 0 ? `e.g. ${bhd(txn.capturedFils - txn.refundedFils).replace(" BHD", "")}` : undefined}
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
               />
             </label>
-            <p className="dash-muted">Captured so far: {bhd(txn.capturedFils)}</p>
+            <p className="dash-muted">
+              Captured: {bhd(txn.capturedFils)} · Already refunded: {bhd(txn.refundedFils)} · Still refundable:{" "}
+              {bhd(txn.capturedFils - txn.refundedFils)}
+            </p>
             <button type="submit" className="dash-button" disabled={submitting}>
               {submitting ? "Refunding..." : "Refund"}
             </button>

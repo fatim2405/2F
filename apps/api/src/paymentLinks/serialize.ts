@@ -20,9 +20,11 @@ export interface PaymentLinkRow {
 }
 
 /** Merchant-facing DTO (create response, list response) — the full,
- *  internal shape, including `id` (to call DELETE) and the raw (not
- *  derived-public) status. Never returned by the public read/pay
- *  endpoints. */
+ *  internal shape, including `id` (to call DELETE) and the stored status,
+ *  except that an 'active' link past expires_at is shown as 'expired'
+ *  ('expired' is never stored; see 0020). Showing the raw 'active' made
+ *  expired links look live on the dashboard. Never returned by the public
+ *  read/pay endpoints. */
 export interface PaymentLinkDto {
   id: string;
   token: string;
@@ -44,6 +46,15 @@ export function buildCheckoutUrl(checkoutBaseUrl: string, token: string): string
   return `${checkoutBaseUrl}/pay/${token}`;
 }
 
+/** The status a merchant sees: stored status, with an expired active link as "expired". */
+export function merchantPaymentLinkStatus(row: Pick<PaymentLinkRow, "status" | "expires_at">, now = new Date()): string {
+  // A 'reserved' link past its expiry is also shown as expired: a pay
+  // attempt that crashed left it 'reserved' forever otherwise.
+  return (row.status === "active" || row.status === "reserved") && row.expires_at.getTime() <= now.getTime()
+    ? "expired"
+    : row.status;
+}
+
 export function serializePaymentLink(row: PaymentLinkRow, checkoutBaseUrl: string): PaymentLinkDto {
   return {
     id: row.id,
@@ -53,7 +64,7 @@ export function serializePaymentLink(row: PaymentLinkRow, checkoutBaseUrl: strin
     currency: row.currency,
     reference: row.reference,
     description: row.description,
-    status: row.status,
+    status: merchantPaymentLinkStatus(row),
     expiresAt: row.expires_at.toISOString(),
     transactionId: row.transaction_id,
     createdAt: row.created_at.toISOString(),

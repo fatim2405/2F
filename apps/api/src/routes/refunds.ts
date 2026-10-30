@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { toFils } from "@filspay/money";
+import { formatBhd, toFils } from "@filspay/money";
 import {
   requireMerchantAuth,
   requireMerchantRole,
@@ -94,7 +94,26 @@ export async function merchantRefundRoutes(app: FastifyInstance): Promise<void> 
         actor: requireMerchantWriterActor(auth),
         reason: input.reason,
       });
-      reply.code(result.statusCode).send(result.body);
+      reply.code(result.statusCode).send(withErrorMessage(result.body));
     },
   );
+}
+
+/**
+ * Validation failures come back as { ok: false, code, ... } with no "error"
+ * field, so the dashboard had nothing to show and the refund form just went
+ * quiet. Add the standard error code and a message a person can read.
+ */
+function withErrorMessage(body: unknown): unknown {
+  const b = body as { ok?: boolean; code?: string; refundableFils?: number; status?: string } | null;
+  if (!b || b.ok !== false || typeof b.code !== "string") return body;
+  const messages: Record<string, string> = {
+    refund_amount_invalid: "The refund amount must be more than 0.000 BHD.",
+    refund_exceeds_refundable:
+      b.refundableFils !== undefined
+        ? `You can refund at most ${formatBhd(toFils(b.refundableFils))} BHD.`
+        : "That is more than can still be refunded.",
+    transaction_not_refundable: `This payment can't be refunded${b.status ? ` (it is ${b.status.replace(/_/g, " ")})` : ""}.`,
+  };
+  return { ...b, error: b.code, message: messages[b.code] ?? "The refund was not accepted." };
 }

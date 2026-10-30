@@ -59,6 +59,13 @@ export interface DashboardLoginResponse {
   devOtpCode?: string;
 }
 
+/** Login answer when the email + password open accounts at several businesses:
+ *  pick one, then log in again with its merchantId. */
+export interface DashboardMerchantChoice {
+  merchantChoiceRequired: true;
+  merchants: Array<{ merchantId: string; displayName: string }>;
+}
+
 export interface DashboardOtpVerifyResponse {
   authenticated: boolean;
   merchantId: string;
@@ -84,14 +91,14 @@ export type TransactionStatus =
 
 /** serializeTransaction() also returns `merchantId` — kept here so the type
  *  matches the wire shape exactly rather than a convenient subset of it. */
-// FH: no refundedFils on this DTO, so the drawer can't compute what's still refundable
-// refundedFils is there, a few lines down — am
 export interface TransactionDto {
   id: string;
   merchantId: string;
   status: TransactionStatus;
   amountFils: number;
   capturedFils: number;
+  /** Cumulative refunded; still refundable = capturedFils - refundedFils. */
+  refundedFils: number;
   currency: string;
   reference: string | null;
   acquirerReference: string;
@@ -127,7 +134,8 @@ export type CaptureResponse = TransactionDto;
 export type VoidResponse = TransactionDto;
 
 // --- payment links ---
-export type PaymentLinkStatus = "active" | "reserved" | "paid" | "canceled";
+/** "expired" is derived by the API (an active link past its expiry), never stored. */
+export type PaymentLinkStatus = "active" | "reserved" | "paid" | "expired" | "canceled";
 
 export interface PaymentLinkDto {
   id: string;
@@ -272,6 +280,8 @@ export interface VolumePointDto {
   capturedCount: number;
   capturedGrossFils: number;
   voidedCount: number;
+  refundCount: number;
+  refundGrossFils: number;
 }
 
 /** `readModelAsOf` is nullable on the two lagged widgets: it reads

@@ -8,7 +8,7 @@ import {
 } from "../../api/transactions.js";
 import { ApiError, describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
-import { bhd, dash, dateTime } from "../../format.js";
+import { bhd, dash, dateTime, parseBdAmountInput, statusLabel } from "../../format.js";
 import type { TransactionDto, TransactionEventDto } from "../../types.js";
 import { RefundDrawer } from "./RefundDrawer.js";
 
@@ -64,14 +64,23 @@ export function TransactionDetailPage() {
   async function handleCapture(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     if (!id) return;
+    const trimmed = captureAmount.trim();
+    let amountFils: number | undefined;
+    if (trimmed !== "") {
+      try {
+        amountFils = parseBdAmountInput(trimmed);
+      } catch (err) {
+        setActionError((err as Error).message);
+        return;
+      }
+    }
     setSubmitting(true);
     setActionError(null);
     try {
-      const trimmed = captureAmount.trim();
       // Left blank, `amountFils` is omitted entirely and capture.ts captures
       // everything still outstanding — its own documented default. Computing
       // the remainder here would just be a second, staler copy of that rule.
-      const input = trimmed === "" ? {} : { amountFils: Number(trimmed) };
+      const input = amountFils === undefined ? {} : { amountFils };
       // A fresh Idempotency-Key per click, including a retry after a decline —
       // same discipline as the checkout page's submit handler.
       await captureTransaction(id, input, crypto.randomUUID());
@@ -145,12 +154,14 @@ export function TransactionDetailPage() {
       <dl className="dash-dl">
         <dt>Status</dt>
         <dd>
-          <span className={`dash-status dash-status-${txn.status}`}>{txn.status}</span>
+          <span className={`dash-status dash-status-${txn.status}`}>{statusLabel(txn.status)}</span>
         </dd>
         <dt>Authorized amount</dt>
         <dd>{bhd(txn.amountFils)}</dd>
         <dt>Captured amount</dt>
         <dd>{bhd(txn.capturedFils)}</dd>
+        <dt>Refunded amount</dt>
+        <dd>{bhd(txn.refundedFils)}</dd>
         <dt>Currency</dt>
         <dd>{txn.currency}</dd>
         <dt>Reference</dt>
@@ -180,11 +191,11 @@ export function TransactionDetailPage() {
               captureOpen ? (
                 <form className="dash-form dash-form-inline" onSubmit={(e) => void handleCapture(e)}>
                   <label>
-                    Amount in fils (blank captures everything outstanding)
+                    Amount in BD (blank captures everything outstanding)
                     <input
-                      type="number"
-                      min={1}
-                      step={1}
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="e.g. 4.750"
                       value={captureAmount}
                       onChange={(e) => setCaptureAmount(e.target.value)}
                     />
@@ -240,7 +251,7 @@ export function TransactionDetailPage() {
           {events.map((event) => (
             <tr key={event.id}>
               <td>{dateTime(event.occurredAt)}</td>
-              <td>{event.eventType}</td>
+              <td>{event.eventType === "refund_partial" ? "partial refund" : event.eventType.replace(/_/g, " ")}</td>
               <td>{event.amountFils === null ? "—" : bhd(event.amountFils)}</td>
               <td>
                 {event.actorType}

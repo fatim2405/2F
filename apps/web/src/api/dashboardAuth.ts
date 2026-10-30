@@ -3,6 +3,7 @@ import type {
   DashboardLoginResponse,
   DashboardMe,
   DashboardOtpVerifyResponse,
+  DashboardMerchantChoice,
 } from "../types.js";
 
 /**
@@ -11,17 +12,18 @@ import type {
  * different tables, different role enum. Nothing here touches the admin
  * plane.
  *
- * `login` requires an explicit `merchantId` because merchant_users.email is
- * unique *per merchant*, not globally, so an email alone cannot identify a
- * user. A success here only creates a *pending* session; nothing is
- * authenticated until `verifyOtp`.
+ * `login` takes email + password. merchant_users.email is unique per merchant,
+ * not globally, so when one email opens accounts at several merchants the
+ * API answers with a list to choose from, and the page logs in again with the
+ * chosen `merchantId`. A success only creates a *pending* session; nothing
+ * is authenticated until `verifyOtp`.
  */
 /** Step 1 of 2. The session is pending until verifyOtp succeeds. */
 export function login(input: {
-  merchantId: string;
+  merchantId?: string;
   email: string;
   password: string;
-}): Promise<DashboardLoginResponse> {
+}): Promise<DashboardLoginResponse | DashboardMerchantChoice> {
   return request("/v1/auth/login", { method: "POST", body: JSON.stringify(input) });
 }
 

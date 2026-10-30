@@ -25,6 +25,10 @@ export function parsePromotionalDiscountFils(raw: string): number {
 }
 
 /**
+ * NO LONGER CALLED: capture.ts now computes the discounted fee itself, the
+ * way settlement does. Kept for its existing tests and so older captures'
+ * adjustment rows stay explainable (processRefund still subtracts them).
+ *
  * Applies a merchant's negotiated processing discount against the MDR fee
  * capture.ts already charged, per the merchant's pricing agreement: the
  * discount applies to our processing fee, after it's calculated — see the

@@ -4,7 +4,7 @@ import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
 import { signBody } from "./sign.js";
 import { WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
 import type { WebhookTransport } from "./transport.js";
-import { NotFoundError } from "../lib/errors.js";
+import { NotFoundError, ConflictError } from "../lib/errors.js";
 
 /** A receiver error status is reported, not thrown. */
 export interface TestSendResult {
@@ -43,6 +43,11 @@ export async function sendTestWebhookEvent(
   const row = result.rows[0];
   if (!row) {
     throw new NotFoundError("webhook_endpoint_not_found");
+  }
+  // A disabled endpoint gets nothing, test events included (same answer as
+  // replay gives).
+  if (row.status === "disabled") {
+    throw new ConflictError("endpoint_disabled", "This endpoint is disabled. Enable it to send a test event.");
   }
 
   const testPayload = {

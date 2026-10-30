@@ -83,14 +83,48 @@ func EnqueuePayoutNotifications(ctx context.Context, db *pgxpool.Pool) (int, err
 		if err != nil {
 			return count, fmt.Errorf("settlement: EnqueuePayoutNotifications: marshal payload: %w", err)
 		}
-		_, err = db.Exec(ctx, `
-			INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload)
-			VALUES ('settlement.paid', 'settlement_batch', $1, $2)
-		`, b.id, payload)
+		// The NOT EXISTS scan above and this insert used to be separate, so two
+		// processes running at once (the daemon tick and a CLI run-batch) both
+		// saw "not yet notified" and both inserted: incident 2026-08-21,
+		// shops got two "your payout is on the way" messages. Re-check and
+		// insert under a per-batch transaction lock instead.
+		inserted, err := insertPayoutNotificationOnce(ctx, db, b.id, payload)
 		if err != nil {
 			return count, fmt.Errorf("settlement: EnqueuePayoutNotifications: insert batch %s: %w", b.id, err)
 		}
-		count++
+		if inserted {
+			count++
+		}
 	}
 	return count, nil
+}
+
+// insertPayoutNotificationOnce inserts the settlement.paid event for one
+// batch unless one already exists, holding a transaction-scoped advisory
+// lock on the batch so concurrent callers serialize on the check.
+func insertPayoutNotificationOnce(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID, payload []byte) (bool, error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('settlement.paid:' || $1::text))`, batchID); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload)
+		SELECT 'settlement.paid', 'settlement_batch', $1, $2
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM outbox_events
+		    WHERE event_type = 'settlement.paid' AND aggregate_id = $1
+		 )
+	`, batchID, payload)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }

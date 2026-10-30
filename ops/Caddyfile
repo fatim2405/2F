@@ -1,0 +1,51 @@
+# Production edge for FilsPay. DOMAIN and ADMIN_DOMAIN come from the
+# environment; Caddy obtains and renews their TLS certificates automatically.
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Only our own scripts; styles also inline (React style props) and Google Fonts.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)"
+		-Server
+	}
+}
+
+(api_proxy) {
+	handle /v1/* {
+		reverse_proxy api:3000 {
+			health_uri /readyz
+			health_interval 10s
+			# The API sheds load itself (503 + Retry-After); keep Caddy's own
+			# queue short so an overload is answered quickly, not stacked up.
+			transport http {
+				dial_timeout 2s
+				response_header_timeout 30s
+			}
+		}
+	}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	import security_headers
+	import api_proxy
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	import security_headers
+	import api_proxy
+	handle {
+		root * /srv/admin
+		try_files {path} /index.html
+		file_server
+	}
+}

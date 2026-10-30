@@ -5,14 +5,14 @@ import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
 import { RequireRole } from "../../auth/RequireRole.js";
 import { Pagination } from "../../components/Pagination.js";
-import { bhd, dash, dateTime } from "../../format.js";
+import { bhd, dash, dateTime, statusLabel } from "../../format.js";
 import type { PaymentLinkDto, PaymentLinkStatus } from "../../types.js";
 
 /** The four *stored* statuses, including `reserved` — the merchant-facing
  *  list deliberately exposes it distinctly rather than collapsing it into the
  *  public enum's `processing`, because a merchant needs to see that a link is
  *  mid-payment-attempt. */
-const STATUSES: PaymentLinkStatus[] = ["active", "reserved", "paid", "canceled"];
+const STATUSES: PaymentLinkStatus[] = ["active", "reserved", "paid", "expired", "canceled"];
 
 const PAGE_SIZE = 25;
 
@@ -111,7 +111,7 @@ export function PaymentLinkListPage() {
               <td>{dash(link.description)}</td>
               <td>{bhd(link.amountFils)}</td>
               <td>
-                <span className={`dash-status dash-status-${link.status}`}>{link.status}</span>
+                <span className={`dash-status dash-status-${link.status}`}>{statusLabel(link.status)}</span>
               </td>
               <td>{dateTime(link.expiresAt)}</td>
               <td>{dateTime(link.paidAt)}</td>

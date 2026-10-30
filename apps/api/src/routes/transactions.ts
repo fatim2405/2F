@@ -4,9 +4,9 @@ import { requireApiKey } from "../apiKeys/verify.js";
 import { requireMerchantAuth, requireMerchantRole, requireMerchantWriterActor } from "../auth/requireMerchantAuth.js";
 import { authorizeTransaction, type AuthorizeInput } from "../payments/authorize.js";
 import { captureTransaction } from "../payments/capture.js";
-import { applyCaptureDiscountAdjustment } from "../payments/discountAdjustment.js";
 import { voidTransaction } from "../payments/void.js";
-import { buildTransactionsExportCsv } from "../transactions/exportCsv.js";
+import { PassThrough } from "node:stream";
+import { streamTransactionsExportCsv } from "../transactions/exportCsv.js";
 import { getTransactionById, listTransactions } from "../transactions/query.js";
 import { listTransactionEvents } from "../transactions/events.js";
 import { BadRequestError, NotFoundError } from "../lib/errors.js";
@@ -65,6 +65,13 @@ function getIdempotencyKey(request: FastifyRequest): string {
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** A positive whole number of fils, or a 400 before anything (the acquirer included) is called. */
+function assertAmountFils(value: unknown): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new BadRequestError("invalid_amount", "amountFils must be a positive whole number of fils");
+  }
+}
+
 export async function transactionRoutes(app: FastifyInstance): Promise<void> {
   // A malformed :id can't name any transaction: answer 404 like an unknown
   // one, instead of letting Postgres reject the uuid cast as a 500.
@@ -84,6 +91,7 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
       if (amountFils === undefined || !card) {
         throw new BadRequestError("invalid_request", "amountFils and card are required");
       }
+      assertAmountFils(amountFils);
 
       const input: AuthorizeInput = {
         merchantId: request.apiKeyAuth!.merchantId,
@@ -103,10 +111,12 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
     // MK: impersonation is read-only, enforced in requireMerchantAuth. fine
     // MK: confirmed — ADMIN.md says grants are support-level read only
     "/:id/capture",
-    { preHandler: requireMerchantAuth },
+    // owner/finance (or an API key), like void and refund: capturing moves money.
+    { preHandler: [requireMerchantAuth, requireMerchantRole("owner", "finance")] },
     async (request, reply) => {
       const idempotencyKey = getIdempotencyKey(request);
       const { amountFils } = request.body ?? {};
+      if (amountFils !== undefined) assertAmountFils(amountFils);
 
       const result = await captureTransaction(app.db, app.acquirer, {
         transactionId: request.params.id,
@@ -115,15 +125,8 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
         idempotencyKey,
         actor: requireMerchantWriterActor(request.merchantAuth!),
       });
-      // discount applied after capture commits, separate txn. on a replayed 200 this runs again
-      // but the count guard makes it a no-op — MK 2026-06
-      // am: and if this throws, the capture is committed but the discount never lands? retry = replay = ...
-      if (result.statusCode === 200) {
-        await applyCaptureDiscountAdjustment(app.db, {
-          merchantId: request.merchantAuth!.merchantId,
-          transactionId: request.params.id,
-        });
-      }
+      // The negotiated discount is part of the fee capture.ts computes, in
+      // the same transaction; the separate post-commit adjustment is gone.
       reply.code(result.statusCode).send(result.body);
     },
   );
@@ -170,17 +173,31 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
       const q = request.query;
       const status = q.status === undefined ? undefined : Array.isArray(q.status) ? q.status : [q.status];
 
-      const csv = await buildTransactionsExportCsv(app.db, {
-        merchantId: request.merchantAuth!.merchantId,
-        from: q.from ? new Date(q.from) : undefined,
-        to: q.to ? new Date(q.to) : undefined,
-        status,
-      });
+      const from = q.from ? new Date(q.from) : undefined;
+      const to = q.to ? new Date(q.to) : undefined;
+      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime()))) {
+        throw new BadRequestError("invalid_request", "from and to must be valid ISO-8601 instants");
+      }
 
+      // Streamed page by page: building the whole CSV in memory first ran
+      // out of memory (or hit the max string length) on wide date ranges.
+      const body = new PassThrough();
       reply
         .header("content-type", "text/csv; charset=utf-8")
         .header("content-disposition", 'attachment; filename="transactions.csv"')
-        .send(csv);
+        .send(body);
+      try {
+        await streamTransactionsExportCsv(
+          app.db,
+          { merchantId: request.merchantAuth!.merchantId, from, to, status },
+          (chunk) => body.write(chunk),
+        );
+        body.end();
+      } catch (err) {
+        request.log.error({ err }, "transactions export failed mid-stream");
+        body.destroy(err as Error);
+      }
+      return reply;
     },
   );
 

@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
-import { estimateFeeFils } from "../fees/estimate.js";
+import { applyRateFils, subtractFils, toFils } from "@filspay/money";
+import { getAppliedVolumeTierBonusBps } from "../fees/platformVolumeTier.js";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
@@ -285,7 +286,7 @@ export async function getReconciliationReport(
   const windowStart = bahrainLocalMidnightUtc(input.from);
   const windowEnd = bahrainLocalMidnightUtc(input.to);
 
-  const [ledgerResult, settlementResult, pendingResult, merchantResult] = await Promise.all([
+  const [ledgerResult, settlementResult, pendingResult, merchantResult, pendingRefundResult, scheduleResult, tierBonusBps] = await Promise.all([
     // What the merchant earned in the window. Payout legs (the only ledger
     // rows carrying a settlement_batch_id — batch.go's payout and the
     // split-to-sub-merchant payout) are left out: they are what
@@ -306,8 +307,8 @@ export async function getReconciliationReport(
           AND status IN ('closed', 'paid')`,
       [input.merchantId, input.from, input.to],
     ),
-    pool.query<{ amount_fils: string | number }>(
-      `SELECT te.amount_fils
+    pool.query<{ amount_fils: string | number; occurred_at: Date }>(
+      `SELECT te.amount_fils, te.occurred_at
          FROM transaction_events te
          JOIN transactions t ON t.id = te.transaction_id
         WHERE t.merchant_id = $1 AND te.event_type IN ('captured', 'partially_captured')
@@ -319,20 +320,49 @@ export async function getReconciliationReport(
       `SELECT mdr_bps, negotiated_discount_bps FROM merchants WHERE id = $1`,
       [input.merchantId],
     ),
+    // Refunds not yet netted into a batch. Their ledger legs (gross debit,
+    // fee-reversal credit) were in the ledger figure but nowhere else, so
+    // every refund showed up as an unexplained gap.
+    pool.query<{ net: string }>(
+      `SELECT COALESCE(SUM(te.amount_fils + COALESCE((te.metadata->>'feeReversedFils')::bigint, 0)), 0) AS net
+         FROM transaction_events te
+         JOIN transactions t ON t.id = te.transaction_id
+        WHERE t.merchant_id = $1 AND te.event_type IN ('refunded', 'refund_partial')
+          AND te.settlement_batch_id IS NULL
+          AND te.occurred_at >= $2 AND te.occurred_at < $3`,
+      [input.merchantId, windowStart, windowEnd],
+    ),
+    // The merchant's effective-dated rates, resolved per event below the same
+    // way capture and settlement do (fees/feeSchedule.ts, EffectiveMdrBpsAt).
+    pool.query<{ mdr_bps: number; effective_from: Date }>(
+      `SELECT mdr_bps, effective_from FROM fee_schedules
+        WHERE merchant_id = $1
+        ORDER BY effective_from DESC, created_at DESC`,
+      [input.merchantId],
+    ),
+    getAppliedVolumeTierBonusBps(pool),
   ]);
 
-  // MK: merchants.mdr_bps is kept in sync with the current fee_schedules row by the 0046 trigger,
-  // so reading it here is the same as resolving the schedule
+  // merchants.mdr_bps is only the fallback: no trigger keeps it in sync with
+  // fee_schedules (a comment here claimed "the 0046 trigger" did; there is
+  // none), so reading it alone used a stale rate for any rescheduled merchant.
   const merchant = merchantResult.rows[0];
-  const mdrBps = merchant?.mdr_bps ?? 0;
+  const fallbackMdrBps = merchant?.mdr_bps ?? 0;
   const discountBps = merchant?.negotiated_discount_bps ?? 0;
+  const rateAt = (at: Date): number => {
+    const row = scheduleResult.rows.find((s) => s.effective_from.getTime() <= at.getTime());
+    return Math.max(0, (row?.mdr_bps ?? fallbackMdrBps) - tierBonusBps);
+  };
 
   let pendingUnbatchedFils = 0;
   for (const row of pendingResult.rows) {
     const amountFils = Number(row.amount_fils);
-    const feeFils = estimateFeeFils(amountFils, mdrBps, discountBps);
+    // Exactly capture.ts / settlement ComputeSettlementFee (was a float estimate).
+    const base = subtractFils(toFils(amountFils), applyRateFils(toFils(amountFils), discountBps));
+    const feeFils = Number(applyRateFils(base, rateAt(row.occurred_at)));
     pendingUnbatchedFils += amountFils - feeFils;
   }
+  pendingUnbatchedFils += Number(pendingRefundResult.rows[0]?.net ?? 0);
 
   const ledgerMerchantPayableNetFils = Number(ledgerResult.rows[0]?.net ?? 0);
   const settlementNetPayoutFils = Number(settlementResult.rows[0]?.total ?? 0);
@@ -370,17 +400,17 @@ export async function getSettlementSummary(
   const windowEnd = bahrainLocalMidnightUtc(input.to);
 
   const result = await pool.query<SettlementSummaryRow>(
-    `WITH captured AS (
-       SELECT t.id, t.captured_fils
-         FROM transactions t
-         JOIN transaction_events te ON te.transaction_id = t.id
-        WHERE t.merchant_id = $1
-          AND te.event_type IN ('captured', 'partially_captured')
-          AND te.occurred_at >= $2 AND te.occurred_at < $3
-     )
-     SELECT COUNT(DISTINCT id) AS transaction_count,
-            COALESCE(SUM(captured_fils), 0) AS total_captured_fils
-       FROM captured`,
+    // Sums each capture event's own amount (te.amount_fils). It used to sum
+    // the transaction's running captured_fils once per capture event, so a
+    // payment captured in two parts was counted twice (and a capture outside
+    // the window leaked in through the running total).
+    `SELECT COUNT(DISTINCT t.id) AS transaction_count,
+            COALESCE(SUM(te.amount_fils), 0) AS total_captured_fils
+       FROM transactions t
+       JOIN transaction_events te ON te.transaction_id = t.id
+      WHERE t.merchant_id = $1
+        AND te.event_type IN ('captured', 'partially_captured')
+        AND te.occurred_at >= $2 AND te.occurred_at < $3`,
     [input.merchantId, windowStart, windowEnd],
   );
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { LoginThrottle } from "../lib/loginThrottle.js";
 import { verifyPassword } from "../auth/passwords.js";
 import { issueChallenge, verifyOtpCode } from "../auth/otp.js";
 import { requireSession } from "../auth/middleware.js";
@@ -49,30 +50,61 @@ interface MerchantUserRow {
  * promoted.
  */
 export async function authRoutes(app: FastifyInstance): Promise<void> {
+  // One per app instance: failed-login counters (see lib/loginThrottle.ts).
+  const throttle = new LoginThrottle();
+
   /** POST /v1/auth/login — step 1. */
   app.post<{ Body: LoginBody }>("/login", async (request, reply) => {
     const { merchantId, email, password } = request.body ?? {};
-    if (!merchantId || !email || !password) {
-      throw new BadRequestError("invalid_request", "merchantId, email and password are required");
+    if (!email || !password) {
+      throw new BadRequestError("invalid_request", "email and password are required");
     }
+    // merchantId is optional: people sign in with email + password. It is
+    // only sent (by the login page, behind the scenes) when one email holds
+    // accounts at several merchants and the user has picked which one.
+    const accountKey = `${merchantId ?? "*"}|${String(email).toLowerCase()}`;
+    throttle.assertAllowed(accountKey, request.ip);
 
-    const userResult = await app.db.query<MerchantUserRow>(
-      `SELECT mu.id, mu.merchant_id, mu.email, mu.role, mu.password_hash
+    const candidates = await app.db.query<MerchantUserRow & { merchant_display_name: string }>(
+      `SELECT mu.id, mu.merchant_id, mu.email, mu.role, mu.password_hash, m.display_name AS merchant_display_name
          FROM merchant_users mu
          JOIN merchants m ON m.id = mu.merchant_id
-        WHERE mu.merchant_id = $1 AND mu.email = $2 AND m.status = 'active'`,
-      [merchantId, email],
+        WHERE mu.email = $1 AND m.status = 'active' AND ($2::uuid IS NULL OR mu.merchant_id = $2::uuid)
+        ORDER BY m.display_name
+        LIMIT 10`,
+      [email, merchantId ?? null],
     );
-    const user = userResult.rows[0];
 
-    // timing-safe: hashes against a dummy when the user is missing. correct — FH
-    const passwordOk = await verifyPassword(user ? user.password_hash : DUMMY_PASSWORD_HASH, password);
+    // The password is checked against every candidate account; only the ones
+    // it opens count. So without the password nobody learns which merchants
+    // an email belongs to. A missing account still costs one hash (against a
+    // dummy), so timing doesn't reveal whether the email exists.
+    const matched: Array<MerchantUserRow & { merchant_display_name: string }> = [];
+    if (candidates.rows.length === 0) {
+      await verifyPassword(DUMMY_PASSWORD_HASH, password);
+    }
+    for (const row of candidates.rows) {
+      if (await verifyPassword(row.password_hash, password)) matched.push(row);
+    }
 
     // The same generic message in every failure case (no row, or wrong
     // password) — the response never discloses which part was wrong.
-    if (!user || !passwordOk) {
+    if (matched.length === 0) {
+      throttle.recordFailure(accountKey, request.ip);
       throw new UnauthorizedError("invalid_credentials");
     }
+    throttle.recordSuccess(accountKey);
+
+    // One email, several businesses, same password: ask which one. No
+    // session is created until the choice comes back with its merchantId.
+    if (matched.length > 1) {
+      reply.code(200).send({
+        merchantChoiceRequired: true,
+        merchants: matched.map((m) => ({ merchantId: m.merchant_id, displayName: m.merchant_display_name })),
+      });
+      return;
+    }
+    const user = matched[0]!;
 
     // The session belongs to the exact (merchant, email) account whose
     // password was just verified. Never re-resolve by email alone: one email
@@ -181,8 +213,6 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         if (consumed.rowCount === 0) {
           throw new GoneError("otp_expired");
         }
-        // promoteSession bumps expires_at to 12h server-side; the cookie maxAge doesn't matter because
-        // MK: admin verify re-sets the cookie after this, merchant verify doesnt. related to the 10 min logouts?
         await promoteSession(client, pending.sessionId, app.config.sessionTtlHours);
         const result = await client.query<{ merchant_id: string; role: "owner" | "finance" | "support" }>(
           `SELECT merchant_id, role FROM merchant_users WHERE id = $1`,
@@ -194,6 +224,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         throw new Error("otp/verify: merchant_users row disappeared mid-transaction");
       }
 
+      // Re-set the cookie with the full session lifetime, as admin verify
+      // does. It was still carrying the 10-minute pending maxAge, so the
+      // browser dropped it and merchants were logged out after 10 minutes.
+      reply.setCookie(app.config.cookieName, rawToken, {
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+        secure: app.config.cookieSecure,
+        maxAge: app.config.sessionTtlHours * 3_600,
+      });
       reply.code(200).send({
         authenticated: true,
         merchantId: merchantUserResult.merchant_id,
@@ -238,6 +278,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         codeLength: app.config.otpCodeLength,
         maxAttempts: app.config.otpMaxAttempts,
       });
+      // Carry the guess count over, as documented above: issueChallenge
+      // starts at 0, so resending every 30s used to reset the budget.
+      if (existingChallenge) {
+        await client.query(
+          `UPDATE otp_challenges SET attempt_count = (SELECT attempt_count FROM otp_challenges WHERE id = $2) WHERE id = $1`,
+          [challenge.id, existingChallenge.id],
+        );
+      }
       await client.query(`UPDATE sessions SET otp_challenge_id = $1 WHERE id = $2`, [
         challenge.id,
         pending.sessionId,

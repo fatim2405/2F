@@ -10,7 +10,7 @@ import {
 import { rotateApiKeyAsAdmin } from "../admin/apiKeys.js";
 import { startImpersonation } from "../admin/impersonation.js";
 import { withTransaction } from "../db/withTransaction.js";
-import { BadRequestError, NotFoundError, UnauthorizedError } from "../lib/errors.js";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "../lib/errors.js";
 import { recordKycReviewInTx } from "../onboarding/review.js";
 import { createWebhookDeliveryArchive, replayWebhookDeliveryArchive } from "../webhooks/archiveReplay.js";
 import { DEFAULT_REPLAY_STATUSES, replayWebhookDeliveriesBatch } from "../webhooks/replayBatch.js";
@@ -151,6 +151,18 @@ export async function adminMerchantRoutes(app: FastifyInstance): Promise<void> {
       // ran rolls back with it. The action and its record either both happen
       // or neither does.
       const result = await withTransaction(app.db, async (client) => {
+        // A decided merchant (approved or rejected) is not re-reviewed by a
+        // second click: that used to flip an approved, live merchant to
+        // rejected, or a rejected one to approved, with no extra step.
+        // Locked so two reviewers can't decide the same merchant at once.
+        const current = await client.query<{ onboarding_status: string }>(
+          `SELECT onboarding_status FROM merchants WHERE id = $1 FOR UPDATE`,
+          [request.params.id],
+        );
+        const status = current.rows[0]?.onboarding_status;
+        if (status === "approved" || status === "rejected") {
+          throw new ConflictError("kyc_already_reviewed", `This merchant is already ${status}.`);
+        }
         const reviewResult = await recordKycReviewInTx(client, {
           merchantId: request.params.id,
           outcome,
@@ -233,6 +245,19 @@ export async function adminMerchantRoutes(app: FastifyInstance): Promise<void> {
       if (statuses !== undefined && (!Array.isArray(statuses) || statuses.length === 0)) {
         throw new BadRequestError("invalid_request", "statuses, if given, must be a non-empty array");
       }
+      // Support may resend failed deliveries only. Re-sending deliveries the
+      // merchant already received (succeeded) or that are still in flight
+      // (pending) sends duplicate notifications, so it needs finance or
+      // super_admin. (A comment here claimed "the route rejects succeeded";
+      // it didn't.)
+      const SUPPORT_REPLAYABLE = new Set(["exhausted", "failed"]);
+      if (
+        adminAuth.role === "support" &&
+        statuses !== undefined &&
+        (statuses as string[]).some((s) => !SUPPORT_REPLAYABLE.has(s))
+      ) {
+        throw new ForbiddenError("forbidden", "support can only replay failed or exhausted deliveries");
+      }
 
       const result = await replayWebhookDeliveriesBatch(app.db, {
         merchantId: request.params.id,
@@ -296,7 +321,10 @@ export async function adminMerchantRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: ArchiveReplayParams; Body: ArchiveReplayBody }>(
     "/:id/webhook-endpoints/:endpointId/archive/:archiveId/replay",
-    { preHandler: [requireAdminSession] },
+    // finance/super_admin: an archive holds every delivery, including ones
+    // the merchant already received, so replaying it as support bypassed the
+    // batch-replay limit and sent duplicates.
+    { preHandler: [requireAdminSession, requireAdminRole("finance", "super_admin")] },
     async (request, reply) => {
       const adminAuth = request.adminAuth;
       if (!adminAuth) throw new UnauthorizedError("unauthenticated");

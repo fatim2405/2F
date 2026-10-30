@@ -126,6 +126,7 @@ export async function adminRoutes(app: FastifyInstance, options: AdminRoutesOpti
         insertAdminAuditLog(client, {
           adminUserId: adminAuth.adminUserId,
           action: "settlement_run_batch",
+          outcome: "started", // updated once the settlement call returns
           targetType: merchantId ? "merchant" : "platform",
           targetId: merchantId ?? null,
           metadata: { date, merchantId: merchantId ?? null },
@@ -178,6 +179,7 @@ export async function adminRoutes(app: FastifyInstance, options: AdminRoutesOpti
         insertAdminAuditLog(client, {
           adminUserId: adminAuth.adminUserId,
           action: "balance_rebuild",
+          outcome: "started", // updated once the settlement call returns
           targetType: "platform",
           targetId: null,
           metadata: {},
@@ -281,6 +283,7 @@ export async function adminRoutes(app: FastifyInstance, options: AdminRoutesOpti
         insertAdminAuditLog(client, {
           adminUserId: adminAuth.adminUserId,
           action: "mdr_recalculation",
+          outcome: "started", // updated once the settlement call returns
           targetType: "merchant",
           targetId: request.params.id,
           metadata: { from, to },

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { LoginThrottle } from "../lib/loginThrottle.js";
 import { verifyPassword } from "../adminAuth/passwords.js";
 import { issueAdminChallenge, verifyOtpCode } from "../adminAuth/otp.js";
 import { sendAdminOtpCode } from "../adminAuth/notifier.js";
@@ -51,11 +52,16 @@ interface AdminUserRow {
  * an ordinary merchant dashboard user.
  */
 export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
+  // One per app instance: failed-login counters (see lib/loginThrottle.ts).
+  const throttle = new LoginThrottle();
+
   app.post<{ Body: LoginBody }>("/login", async (request, reply) => {
     const { email, password } = request.body ?? {};
     if (!email || !password) {
       throw new BadRequestError("invalid_request", "email and password are required");
     }
+    const accountKey = `admin|${String(email).toLowerCase()}`;
+    throttle.assertAllowed(accountKey, request.ip);
 
     const userResult = await app.db.query<AdminUserRow>(
       `SELECT id, email, role, password_hash FROM admin_users WHERE email = $1 AND status = 'active'`,
@@ -68,8 +74,10 @@ export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
     // The same generic error in every failure case (no row, disabled
     // account, or wrong password) — the response never discloses which.
     if (!user || !passwordOk) {
+      throttle.recordFailure(accountKey, request.ip);
       throw new UnauthorizedError("invalid_credentials");
     }
+    throttle.recordSuccess(accountKey);
 
     const { code, expiresAt, rawToken } = await withTransaction(app.db, async (client) => {
       const challenge = await issueAdminChallenge(client, {
@@ -185,8 +193,7 @@ export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
 
     // Re-set the cookie so its browser-side lifetime matches the now-promoted
     // session's full TTL rather than the short pending window.
-    // YA: why is the cookie set twice (login and verify)? Claude says remove one
-    // FH: the second one re-issues at the full session TTL. the merchant flow should do the same
+    // Re-set the cookie at the full session lifetime (the pending one was short).
     reply.setCookie(app.config.adminCookieName, rawToken, {
       httpOnly: true,
       path: "/",

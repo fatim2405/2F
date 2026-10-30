@@ -7,7 +7,9 @@
    stylesheet for the whole app — a global rule here would reach the
    /pay/:token checkout page too, which has its own look and must keep it. */
 
-/* am: dont add bare element selectors here, they leak into checkout (see top) */
+/* No bare element selectors in the base rules below: they would reach the
+   checkout page. The dark theme at the end sets html/body on purpose, since
+   checkout now shares it. */
 .dash-shell {
   min-height: 100vh;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -250,6 +252,7 @@
 
 .dash-status-authorized,
 .dash-status-partially_captured,
+.dash-status-partially_refunded,
 .dash-status-pending,
 .dash-status-reserved,
 .dash-status-open {
@@ -258,6 +261,7 @@
 
 .dash-status-voided,
 .dash-status-canceled,
+.dash-status-expired,
 .dash-status-disabled,
 .dash-status-exhausted,
 .dash-status-failed,
@@ -307,4 +311,468 @@
   height: 0.7rem;
   min-width: 1px;
   background: #4a7ebb;
+}
+
+/* ==========================================================================
+   Dark theme (UI/UX pass, Oct 2026). Layered last so it wins over the base
+   rules above. A dark, card-based look with a red accent: inspired by local
+   payment sites such as benefit.bh, using FilsPay's own name and mark.
+   The checkout page (CheckoutPage.css) shares these tokens, so the page
+   background below is set once for the whole app; both halves are dark now.
+   ========================================================================== */
+:root {
+  --fp-bg: #0b0d12;
+  --fp-surface: #141821;
+  --fp-surface-2: #1b2130;
+  --fp-border: #272e3d;
+  --fp-text: #e8eaf0;
+  --fp-muted: #98a1b3;
+  --fp-accent: #e4262e;
+  --fp-accent-hover: #ff3d45;
+  --fp-accent-soft: rgba(228, 38, 46, 0.14);
+  --fp-ok: #2bd47d;
+  --fp-ok-soft: rgba(43, 212, 125, 0.13);
+  --fp-warn: #f5b942;
+  --fp-warn-soft: rgba(245, 185, 66, 0.13);
+  --fp-bad: #ff6b6b;
+  --fp-bad-soft: rgba(255, 107, 107, 0.13);
+  --fp-info: #6aa8ff;
+  --fp-info-soft: rgba(106, 168, 255, 0.13);
+  --fp-radius: 14px;
+  --fp-font: "Poppins", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+html,
+body {
+  margin: 0;
+  background: var(--fp-bg);
+}
+
+/* --- shell, header, navigation ------------------------------------------ */
+.dash-shell,
+.dash-centered {
+  font-family: var(--fp-font);
+  color: var(--fp-text);
+  background: radial-gradient(1200px 500px at 10% -10%, rgba(228, 38, 46, 0.12), transparent 60%), var(--fp-bg);
+  min-height: 100vh;
+}
+.dash-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  gap: 2rem;
+  padding: 0.9rem 2rem;
+  background: rgba(11, 13, 18, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--fp-border);
+}
+.dash-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #fff;
+}
+.dash-brand::before {
+  content: "F";
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--fp-accent), #a3121a);
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(228, 38, 46, 0.35);
+}
+.dash-nav {
+  gap: 0.35rem;
+}
+.dash-nav a {
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  color: var(--fp-muted);
+  text-decoration: none;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.dash-nav a:hover {
+  color: var(--fp-text);
+  background: var(--fp-surface-2);
+}
+.dash-nav a.active {
+  color: #fff;
+  background: var(--fp-accent);
+  text-decoration: none;
+}
+.dash-identity {
+  color: var(--fp-muted);
+}
+.dash-role-chip {
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--fp-border);
+  border-radius: 999px;
+  background: var(--fp-surface-2);
+  color: var(--fp-text);
+  font-size: 0.78rem;
+  text-transform: capitalize;
+}
+
+/* --- page body ------------------------------------------------------------ */
+.dash-main {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+.dash-shell h1,
+.dash-centered h1 {
+  margin: 0.25rem 0 1.25rem;
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: #fff;
+}
+.dash-shell h2 {
+  color: #fff;
+  font-weight: 600;
+}
+.dash-shell a {
+  color: var(--fp-text);
+}
+.dash-shell a:hover {
+  color: var(--fp-accent-hover);
+}
+.dash-muted,
+.dash-hint {
+  color: var(--fp-muted);
+}
+.dash-shell code,
+.dash-centered code {
+  padding: 0.05rem 0.35rem;
+  border-radius: 6px;
+  background: var(--fp-surface-2);
+  color: #ffd0d2;
+  font-size: 0.85em;
+}
+
+/* --- login card ------------------------------------------------------------ */
+.dash-centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  box-sizing: border-box;
+}
+.dash-centered > * {
+  width: 100%;
+  max-width: 420px;
+}
+.dash-centered > h1::before {
+  content: "F";
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-right: 0.7rem;
+  vertical-align: middle;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--fp-accent), #a3121a);
+  color: #fff;
+  font-size: 1.2rem;
+}
+.dash-centered > .dash-form {
+  padding: 1.75rem;
+  border: 1px solid var(--fp-border);
+  border-radius: var(--fp-radius);
+  background: var(--fp-surface);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+/* --- forms and buttons ----------------------------------------------------- */
+.dash-form label,
+.dash-filters label {
+  color: var(--fp-muted);
+  font-size: 0.88rem;
+}
+.dash-form input,
+.dash-form select,
+.dash-form textarea,
+.dash-filters input,
+.dash-filters select {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--fp-border);
+  border-radius: 10px;
+  background: var(--fp-bg);
+  color: var(--fp-text);
+  font: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.dash-form input:focus,
+.dash-form select:focus,
+.dash-filters input:focus {
+  border-color: var(--fp-accent);
+  box-shadow: 0 0 0 3px var(--fp-accent-soft);
+}
+.dash-filters input[type="checkbox"] {
+  accent-color: var(--fp-accent);
+}
+.dash-button,
+.dash-button-link {
+  padding: 0.6rem 1.15rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--fp-accent);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 6px 18px rgba(228, 38, 46, 0.25);
+  transition: background 0.15s, transform 0.05s;
+}
+.dash-button:hover:not(:disabled),
+.dash-button-link:hover {
+  background: var(--fp-accent-hover);
+  color: #fff;
+}
+.dash-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.dash-button:focus-visible,
+.dash-nav a:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.dash-header .dash-button {
+  background: transparent;
+  border-color: var(--fp-border);
+  box-shadow: none;
+  color: var(--fp-text);
+}
+.dash-header .dash-button:hover {
+  background: var(--fp-surface-2);
+}
+
+/* --- cards: filters, tables, details -------------------------------------- */
+.dash-filters,
+.dash-dl,
+.dash-confirm,
+.dash-secret,
+.dash-pre {
+  border: 1px solid var(--fp-border);
+  border-radius: var(--fp-radius);
+  background: var(--fp-surface);
+  padding: 1rem 1.25rem;
+}
+.dash-filters legend {
+  padding: 0 0.4rem;
+  color: var(--fp-text);
+  font-weight: 600;
+}
+.dash-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--fp-border);
+  border-radius: var(--fp-radius);
+  background: var(--fp-surface);
+}
+.dash-table th {
+  padding: 0.8rem 1rem;
+  background: var(--fp-surface-2);
+  color: var(--fp-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--fp-border);
+}
+.dash-table td {
+  padding: 0.75rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--fp-border);
+  color: var(--fp-text);
+}
+.dash-table tr:last-child td {
+  border-bottom: 0;
+}
+.dash-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+.dash-table a {
+  color: #fff;
+  font-weight: 500;
+  text-decoration: none;
+}
+.dash-table a:hover {
+  color: var(--fp-accent-hover);
+}
+.dash-dl dt {
+  color: var(--fp-muted);
+}
+.dash-dl dd {
+  color: var(--fp-text);
+}
+
+/* --- messages -------------------------------------------------------------- */
+.dash-error,
+.dash-notice {
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+}
+.dash-error {
+  border: 1px solid rgba(255, 107, 107, 0.35);
+  background: var(--fp-bad-soft);
+  color: #ffc9c9;
+}
+.dash-notice {
+  border: 1px solid rgba(106, 168, 255, 0.35);
+  background: var(--fp-info-soft);
+  color: #cfe2ff;
+}
+
+/* --- status pills ---------------------------------------------------------- */
+.dash-status {
+  display: inline-block;
+  padding: 0.18rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  background: var(--fp-surface-2);
+  color: var(--fp-text);
+}
+.dash-status-captured,
+.dash-status-paid,
+.dash-status-succeeded,
+.dash-status-active {
+  background: var(--fp-ok-soft);
+  color: var(--fp-ok);
+}
+.dash-status-authorized,
+.dash-status-partially_captured,
+.dash-status-partially_refunded,
+.dash-status-pending,
+.dash-status-reserved,
+.dash-status-open {
+  background: var(--fp-warn-soft);
+  color: var(--fp-warn);
+}
+.dash-status-voided,
+.dash-status-canceled,
+.dash-status-expired,
+.dash-status-disabled,
+.dash-status-exhausted,
+.dash-status-failed,
+.dash-status-chargeback {
+  background: var(--fp-bad-soft);
+  color: var(--fp-bad);
+}
+.dash-status-refunded,
+.dash-status-closed {
+  background: var(--fp-info-soft);
+  color: var(--fp-info);
+}
+.dash-badge {
+  border-radius: 999px;
+}
+.dash-bar {
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--fp-accent), #ff7a5c);
+}
+
+@media (max-width: 760px) {
+  .dash-header {
+    padding: 0.75rem 1rem;
+    gap: 0.75rem;
+  }
+  .dash-main {
+    padding: 1.25rem 1rem;
+  }
+  .dash-table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* Header on one line: identity and log-out pushed to the right. */
+.dash-header {
+  flex-wrap: nowrap;
+  gap: 1.25rem;
+}
+.dash-nav {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.dash-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+@media (max-width: 1100px) {
+  .dash-header {
+    flex-wrap: wrap;
+  }
+}
+.dash-nav {
+  flex-shrink: 0;
+  overflow: visible;
+}
+.dash-nav a {
+  white-space: nowrap;
+  padding: 0.4rem 0.7rem;
+}
+.dash-identity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The email/shop name shrinks (ellipsis); the Log out button never does. */
+.dash-identity {
+  overflow: visible;
+}
+.dash-identity > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-identity > .dash-button {
+  flex-shrink: 0;
+}
+.dash-badge {
+  padding: 0.15rem 0.6rem;
+  border: 1px solid transparent;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.dash-badge-live,
+.dash-badge-ok {
+  background: var(--fp-ok-soft);
+  border-color: rgba(43, 212, 125, 0.35);
+  color: var(--fp-ok);
+}
+.dash-badge-stale {
+  background: var(--fp-warn-soft);
+  border-color: rgba(245, 185, 66, 0.35);
+  color: var(--fp-warn);
+}
+.dash-badge-gap {
+  background: var(--fp-bad-soft);
+  border-color: rgba(255, 107, 107, 0.35);
+  color: var(--fp-bad);
+}
+/* The login page's column is narrow; paint the glow on the page, not the column. */
+body:has(.dash-centered) {
+  background: radial-gradient(1200px 500px at 10% -10%, rgba(228, 38, 46, 0.12), transparent 60%), var(--fp-bg);
+  background-attachment: fixed;
+}
+.dash-centered {
+  background: transparent;
+  margin: 0 auto;
 }

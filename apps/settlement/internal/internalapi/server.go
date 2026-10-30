@@ -263,9 +263,16 @@ func handleRunBatch(pool *pgxpool.Pool) http.Handler {
 
 // handleRebuildBalances backs the admin console's "Rebuild cached balances"
 // action. Takes no body; any body sent is ignored.
+//
+// FP-203: it used to call RefreshBalanceCache, which recomputes from
+// merchant_payable_position (gross scheme-export totals: no fees, payouts,
+// refunds or adjustments), while the CLI rebuilds from the ledger, so the
+// button and the CLI disagreed (Alpha Retail 135K -> 7K). It now uses the
+// same ledger rebuild as the CLI, made a single aggregate query so it fits
+// the button's request timeout.
 func handleRebuildBalances(pool *pgxpool.Pool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		diffs, err := ledger.RefreshBalanceCache(r.Context(), pool)
+		diffs, err := ledger.RebuildAllBalances(r.Context(), pool)
 		if err != nil {
 			log.Printf("settlement internal api: rebuild-balances failed: %v", err)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "rebuild_balances_failed"})

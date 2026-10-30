@@ -29,7 +29,7 @@ export function computeResidueFils(capturedFils: number): number {
   return capturedFils % 10;
 }
 
-interface MerchantResidue {
+export interface MerchantResidue {
   merchantId: string;
   lineCount: number;
   residueFils: number;
@@ -68,17 +68,33 @@ function groupByMerchant(rows: ResidueRow[]): MerchantResidue[] {
   return [...byMerchant.values()];
 }
 
-// am: re-running is safe, entry_group_id dedupes it
-async function postResidueCorrection(client: Client, merchant: MerchantResidue, now: Date): Promise<void> {
-  if (merchant.residueFils <= 0) return;
+const SWEEP_DESCRIPTION = "March 2026 scheme rounding residue sweep — manual recon per finance";
+
+/**
+ * Posts the sweep for one merchant unless it was already posted. A fresh
+ * random entry_group_id deduped nothing, and the residue is recomputed from
+ * transactions (which the sweep never changes), so every re-run posted the
+ * full residue again: the staging gap doubled. Returns false if skipped.
+ * Callers hold the advisory lock taken in main(), so two runs can't race.
+ */
+export async function postResidueCorrection(client: Client, merchant: MerchantResidue, now: Date): Promise<boolean> {
+  if (merchant.residueFils <= 0) return false;
+  const description = SWEEP_DESCRIPTION;
+  const already = await client.query(
+    `SELECT 1 FROM ledger_entries
+      WHERE merchant_id = $1 AND account_id = 'scheme_rounding_residue' AND description = $2
+      LIMIT 1`,
+    [merchant.merchantId, description],
+  );
+  if (already.rows.length > 0) return false;
   const entryGroupId = randomUUID();
-  const description = "March 2026 scheme rounding residue sweep — manual recon per finance";
   await client.query(
     `INSERT INTO ledger_entries (entry_group_id, merchant_id, account_id, direction, amount_fils, occurred_at, description)
      VALUES ($1, $2, 'merchant_payable', 'debit', $3, $4, $5),
             ($1, $2, 'scheme_rounding_residue', 'credit', $3, $4, $5)`,
     [entryGroupId, merchant.merchantId, merchant.residueFils, now.toISOString(), description],
   );
+  return true;
 }
 
 async function main(): Promise<void> {
@@ -105,10 +121,11 @@ async function main(): Promise<void> {
 
     await client.query("BEGIN");
     try {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('reconcile_march_2026_03'))");
       for (const merchant of merchantResidues) {
-        await postResidueCorrection(client, merchant, now);
+        const posted = await postResidueCorrection(client, merchant, now);
         console.log(
-          `merchant ${merchant.merchantId}: ${merchant.lineCount} line(s), residue ${formatBhd(toFils(merchant.residueFils))} BD (${merchant.residueFils} fils)`,
+          `merchant ${merchant.merchantId}: ${merchant.lineCount} line(s), residue ${formatBhd(toFils(merchant.residueFils))} BD (${merchant.residueFils} fils)${posted ? "" : " — already swept, skipped"}`,
         );
       }
       await client.query("COMMIT");

@@ -3,12 +3,14 @@ import { useParams } from "react-router-dom";
 import { formatBhd, toFils } from "@filspay/money";
 import { getPaymentLink, payPaymentLink } from "../../api/paymentLinks.js";
 import { ApiError } from "../../api/client.js";
+import { dateTime } from "../../format.js";
 import type { PaymentLinkPublicDto, PayPaymentLinkResponse, SimulatedCardInput } from "../../types.js";
 import "./CheckoutPage.css";
 
 type LoadState =
   | { kind: "loading" }
   | { kind: "not_found" }
+  | { kind: "error" }
   | { kind: "loaded"; link: PaymentLinkPublicDto };
 
 type PayState =
@@ -39,10 +41,14 @@ export function CheckoutPage() {
       .then((link) => {
         if (!cancelled) setLoadState({ kind: "loaded", link });
       })
-      .catch(() => {
-        // Never distinguishes "malformed token" from "doesn't exist" —
-        // matches the API's own non-disclosure choice.
-        if (!cancelled) setLoadState({ kind: "not_found" });
+      .catch((err: unknown) => {
+        // A 404 (malformed or unknown token, not distinguished, as the API
+        // chooses) is "does not exist". Anything else, a server error or no
+        // network, is a temporary failure and must not tell the customer the
+        // link is gone.
+        if (cancelled) return;
+        if (err instanceof ApiError && err.statusCode === 404) setLoadState({ kind: "not_found" });
+        else setLoadState({ kind: "error" });
       });
     return () => {
       cancelled = true;
@@ -95,6 +101,15 @@ export function CheckoutPage() {
     );
   }
 
+  if (loadState.kind === "error") {
+    return (
+      <main className="checkout-page">
+        <h1>Something went wrong</h1>
+        <p>We couldn't load this payment link right now. Please try again in a moment.</p>
+      </main>
+    );
+  }
+
   if (loadState.kind === "not_found") {
     return (
       <main className="checkout-page">
@@ -115,7 +130,7 @@ export function CheckoutPage() {
           <dt>Transaction ID</dt>
           <dd>{payState.result.transactionId}</dd>
           <dt>Paid at</dt>
-          <dd>{payState.result.paidAt}</dd>
+          <dd>{dateTime(payState.result.paidAt)}</dd>
         </dl>
       </main>
     );
@@ -182,6 +197,9 @@ export function CheckoutPage() {
           <input
             type="text"
             inputMode="numeric"
+            autoComplete="cc-number"
+            placeholder="1234 5678 9012 3456"
+            maxLength={23}
             required
             value={card.pan}
             onChange={(e) => {
@@ -206,6 +224,8 @@ export function CheckoutPage() {
             Expiry month
             <input
               type="number"
+              autoComplete="cc-exp-month"
+              placeholder="MM"
               min={1}
               max={12}
               required
@@ -217,6 +237,8 @@ export function CheckoutPage() {
             Expiry year
             <input
               type="number"
+              autoComplete="cc-exp-year"
+              placeholder="YYYY"
               min={new Date().getFullYear()}
               required
               value={card.expiryYear}
@@ -226,18 +248,22 @@ export function CheckoutPage() {
           <label>
             CVV
             <input
-              type="text"
+              type="password"
               inputMode="numeric"
+              autoComplete="cc-csc"
+              placeholder="123"
+              maxLength={4}
               required
               value={card.cvv}
               onChange={(e) => setCard({ ...card, cvv: e.target.value })}
             />
           </label>
         </div>
-        <button type="submit" disabled={submitting}>
-          {submitting ? "Processing..." : `Pay ${amount} BHD`}
+        <button type="submit" disabled={submitting} aria-busy={submitting}>
+          {submitting ? "Processing payment..." : `Pay ${amount} BHD`}
         </button>
       </form>
+      <p className="checkout-help">Your card details go straight to the acquirer over an encrypted connection.</p>
 
       <p className="checkout-help">
         Test cards (simulated acquirer, no real charge): any other number approves; a PAN ending{" "}

@@ -1,10 +1,10 @@
 #!/usr/bin/env -S npx tsx
 /**
  * Nightly janitor: a hold that's never captured or released just sits in
- * the table past its expires_at forever — nothing else in the platform
- * ever deletes a holds row (authorize.ts inserts one, capture.ts/void.ts
- * release one; nothing sweeps one). Run once a night from cron/the host's
- * own scheduler.
+ * the table past its expires_at as 'active' forever. This marks those holds
+ * 'expired'. Holds are never deleted (decided 2026-10-30, as HANDOVER.md
+ * says): the row is the record that the money was held. Run once a night
+ * from cron/the host's own scheduler.
  *
  * Usage: DATABASE_URL=postgres://... npx tsx scripts/expire_holds.ts
  */
@@ -21,14 +21,28 @@ export async function fetchExpiredHoldIds(client: Client): Promise<string[]> {
   return result.rows.map((r) => r.id);
 }
 
+/** Kept for its existing tests; main() no longer deletes holds. */
 export function buildExpiredHoldsDelete(expiredIds: string[]): { text: string; values: unknown[] } {
   return buildDelete("holds", { id: expiredIds });
 }
 
 /**
- * Deletes only holds that are still 'active' and past expires_at. Captured
- * or released holds are never touched, and a night with nothing expired
- * changes no rows.
+ * Marks still-'active' holds past expires_at as 'expired', in one statement.
+ * The status and expiry are re-checked in the UPDATE itself, so a hold
+ * captured or released after the SELECT is never touched.
+ */
+export function buildExpireHoldsUpdate(expiredIds: string[]): { text: string; values: unknown[] } {
+  return {
+    text: `UPDATE holds SET status = 'expired'
+            WHERE id = ANY($1::uuid[]) AND status = 'active' AND expires_at < now()`,
+    values: [expiredIds],
+  };
+}
+
+/**
+ * Marks only holds that are still 'active' and past expires_at. Captured
+ * or released holds are never touched, nothing is deleted, and a night with
+ * nothing expired changes no rows.
  */
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
@@ -39,12 +53,11 @@ async function main(): Promise<void> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
-    // FH: SELECT then DELETE, a hold could be captured in between. claude: "negligible window, fine."
     const expiredIds = await fetchExpiredHoldIds(client);
-    const { text, values } = buildExpiredHoldsDelete(expiredIds);
+    const { text, values } = buildExpireHoldsUpdate(expiredIds);
     const result = await client.query(text, values);
     console.log(
-      `expire_holds: matched ${expiredIds.length} abandoned hold(s), deleted ${result.rowCount ?? 0} row(s)`,
+      `expire_holds: matched ${expiredIds.length} abandoned hold(s), marked ${result.rowCount ?? 0} expired`,
     );
   } finally {
     await client.end();

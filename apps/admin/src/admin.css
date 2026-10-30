@@ -226,3 +226,314 @@ button:disabled {
   margin-top: 0.4rem;
   font-weight: 700;
 }
+
+/* ==========================================================================
+   Dark theme (UI/UX pass, Oct 2026), matching the merchant dashboard: dark
+   cards, red accent, pill buttons. Layered last so it wins over the base
+   rules above. The impersonation banner stays a loud amber stripe on purpose.
+   ========================================================================== */
+:root {
+  --fa-bg: #0b0d12;
+  --fa-surface: #141821;
+  --fa-surface-2: #1b2130;
+  --fa-border: #272e3d;
+  --fa-text: #e8eaf0;
+  --fa-muted: #98a1b3;
+  --fa-accent: #e4262e;
+  --fa-accent-hover: #ff3d45;
+  --fa-accent-soft: rgba(228, 38, 46, 0.14);
+  color-scheme: dark;
+}
+body {
+  font-family: "Poppins", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--fa-text);
+  background: radial-gradient(1200px 500px at 10% -10%, rgba(228, 38, 46, 0.12), transparent 60%), var(--fa-bg);
+  background-attachment: fixed;
+}
+a {
+  color: var(--fa-text);
+}
+a:hover {
+  color: var(--fa-accent-hover);
+}
+code {
+  padding: 0.05rem 0.35rem;
+  border-radius: 6px;
+  background: var(--fa-surface-2);
+  color: #ffd0d2;
+}
+h1 {
+  color: #fff;
+  font-weight: 700;
+}
+h2,
+h3 {
+  color: #fff;
+  font-weight: 600;
+}
+
+/* header */
+.admin-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  gap: 2rem;
+  padding: 0.9rem 2rem;
+  background: rgba(11, 13, 18, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--fa-border);
+}
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #fff;
+  font-size: 1.1rem;
+}
+.admin-brand::before {
+  content: "F";
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--fa-accent), #a3121a);
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(228, 38, 46, 0.35);
+}
+.admin-nav {
+  gap: 0.35rem;
+}
+.admin-nav a {
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  color: var(--fa-muted);
+  font-weight: 500;
+}
+.admin-nav a:hover {
+  color: var(--fa-text);
+  background: var(--fa-surface-2);
+}
+.admin-nav a.active {
+  color: #fff;
+  background: var(--fa-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.admin-identity {
+  color: var(--fa-muted);
+}
+.admin-role-chip {
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--fa-border);
+  border-radius: 999px;
+  background: var(--fa-surface-2);
+  color: var(--fa-text);
+  font-size: 0.78rem;
+}
+
+/* layout */
+.admin-main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+.admin-centered {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100vh;
+  box-sizing: border-box;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+.admin-centered > .admin-form {
+  padding: 1.75rem;
+  border: 1px solid var(--fa-border);
+  border-radius: 14px;
+  background: var(--fa-surface);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+/* forms and buttons */
+.admin-form label,
+.admin-filters label {
+  color: var(--fa-muted);
+  font-size: 0.88rem;
+}
+input,
+select,
+textarea {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--fa-border);
+  border-radius: 10px;
+  background: var(--fa-bg);
+  color: var(--fa-text);
+  font: inherit;
+  outline: none;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--fa-accent);
+  box-shadow: 0 0 0 3px var(--fa-accent-soft);
+}
+input[type="checkbox"] {
+  padding: 0;
+  accent-color: var(--fa-accent);
+}
+.admin-form input,
+.admin-form select,
+.admin-form textarea {
+  border: 1px solid var(--fa-border);
+  border-radius: 10px;
+}
+button {
+  padding: 0.55rem 1.1rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--fa-accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(228, 38, 46, 0.22);
+}
+button:hover:not(:disabled) {
+  background: var(--fa-accent-hover);
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.admin-header button {
+  background: transparent;
+  border-color: var(--fa-border);
+  box-shadow: none;
+  color: var(--fa-text);
+}
+.admin-header button:hover:not(:disabled) {
+  background: var(--fa-surface-2);
+}
+
+/* cards and tables */
+.admin-filters,
+.admin-dl,
+.admin-confirm {
+  border: 1px solid var(--fa-border);
+  border-radius: 14px;
+  background: var(--fa-surface);
+  padding: 1rem 1.25rem;
+}
+.admin-filters legend {
+  padding: 0 0.4rem;
+  color: var(--fa-text);
+  font-weight: 600;
+}
+.admin-confirm {
+  border-color: rgba(245, 185, 66, 0.5);
+  background: rgba(245, 185, 66, 0.08);
+}
+.admin-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--fa-border);
+  border-radius: 14px;
+  background: var(--fa-surface);
+}
+.admin-table th,
+.admin-table td {
+  border: 0;
+  border-bottom: 1px solid var(--fa-border);
+  padding: 0.75rem 1rem;
+}
+.admin-table th {
+  background: var(--fa-surface-2);
+  color: var(--fa-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.admin-table tr:last-child td {
+  border-bottom: 0;
+}
+.admin-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+.admin-table a {
+  color: #fff;
+  font-weight: 500;
+  text-decoration: none;
+}
+.admin-table a:hover {
+  color: var(--fa-accent-hover);
+}
+.admin-dl dt,
+.admin-muted {
+  color: var(--fa-muted);
+}
+
+/* messages */
+.admin-error {
+  border: 1px solid rgba(255, 107, 107, 0.4);
+  border-radius: 10px;
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffc9c9;
+}
+.admin-notice {
+  border: 1px solid rgba(43, 212, 125, 0.4);
+  border-radius: 10px;
+  background: rgba(43, 212, 125, 0.1);
+  color: #c4f5da;
+}
+
+/* impersonation: deliberately loud */
+.impersonation-banner {
+  background: #f5b942;
+  color: #1a1200;
+  font-weight: 600;
+}
+.impersonation-banner code {
+  background: rgba(0, 0, 0, 0.15);
+  color: #1a1200;
+}
+.impersonation-banner button {
+  background: #1a1200;
+  color: #fff;
+  box-shadow: none;
+}
+
+@media (max-width: 760px) {
+  .admin-header {
+    padding: 0.75rem 1rem;
+    gap: 0.75rem;
+  }
+  .admin-main {
+    padding: 1.25rem 1rem;
+  }
+  .admin-table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* Header on one line: identity and log-out on the right. */
+.admin-header {
+  flex-wrap: nowrap;
+  gap: 1.25rem;
+}
+.admin-nav a {
+  white-space: nowrap;
+}
+.admin-identity {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+@media (max-width: 1000px) {
+  .admin-header {
+    flex-wrap: wrap;
+  }
+}

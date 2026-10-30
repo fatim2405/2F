@@ -6,40 +6,11 @@ import { withTransaction } from "../db/withTransaction.js";
 import type { AcquirerSimulator } from "../acquirer/types.js";
 import { claimIdempotencyKey, completeIdempotencyKey, failIdempotencyKey, hashRequest } from "./idempotency.js";
 import { recordTransactionEvent } from "../transactions/events.js";
+import { nextStatusAfterRefund } from "./refundState.js";
 import { serializeTransaction, type TransactionRow } from "../transactions/serialize.js";
 import { ConflictError, UnprocessableEntityError } from "../lib/errors.js";
 import { getEffectiveMdrBps } from "../fees/feeSchedule.js";
-import { getVolumeTierBonusBps } from "../fees/platformVolumeTier.js";
-
-async function recordCaptureMetric(
-  client: import("pg").PoolClient,
-  merchantId: string,
-  amountFils: Fils,
-  capturedAt: Date,
-): Promise<void> {
-  const dateStr = capturedAt.toISOString().slice(0, 10);
-  const existing = await client.query(
-    `SELECT merchant_id FROM merchant_daily_volume WHERE merchant_id = $1 AND volume_date = $2`,
-    [merchantId, dateStr],
-  );
-  if (existing.rows[0]) {
-    await client.query(
-      `UPDATE merchant_daily_volume
-          SET captured_count = captured_count + 1, captured_gross_fils = captured_gross_fils + $3
-        WHERE merchant_id = $1 AND volume_date = $2`,
-      [merchantId, dateStr, amountFils],
-    );
-  } else {
-    await client.query(
-      `INSERT INTO merchant_daily_volume (merchant_id, volume_date, captured_count, captured_gross_fils, voided_count)
-       VALUES ($1, $2, 1, $3, 0)
-       ON CONFLICT (merchant_id, volume_date)
-       DO UPDATE SET captured_count = merchant_daily_volume.captured_count + 1,
-                     captured_gross_fils = merchant_daily_volume.captured_gross_fils + $3`,
-      [merchantId, dateStr, amountFils],
-    );
-  }
-}
+import { getAppliedVolumeTierBonusBps } from "../fees/platformVolumeTier.js";
 
 const ENDPOINT = "transactions.capture";
 
@@ -67,6 +38,7 @@ interface LockedTransactionRow {
   status: string;
   amount_fils: string | number;
   captured_fils: string | number;
+  refunded_fils: string | number;
   acquirer_reference: string;
 }
 
@@ -89,7 +61,10 @@ export async function captureTransaction(
   acquirer: AcquirerSimulator,
   input: CaptureInput,
 ): Promise<CaptureResult> {
-  const requestHash = hashRequest({ amountFils: input.amountFils ?? null });
+  // The transaction is part of the request: reusing a key for a different
+  // transaction must be refused, not answered with the first one's result
+  // (which left the second transaction uncaptured).
+  const requestHash = hashRequest({ transactionId: input.transactionId, amountFils: input.amountFils ?? null });
 
   return withTransaction(pool, async (client) => {
     const claim = await claimIdempotencyKey(client, {
@@ -117,7 +92,7 @@ export async function captureTransaction(
     // so ownership can never be satisfied by a value the caller controls
     // independently of how they authenticated.
     const lockResult = await client.query<LockedTransactionRow>(
-      `SELECT id, merchant_id, status, amount_fils, captured_fils, acquirer_reference
+      `SELECT id, merchant_id, status, amount_fils, captured_fils, refunded_fils, acquirer_reference
          FROM transactions
         WHERE id = $1 AND merchant_id = $2
         FOR UPDATE`,
@@ -150,8 +125,8 @@ export async function captureTransaction(
       return { statusCode: 422, body };
     }
 
-    const merchantResult = await client.query<{ mdr_bps: number }>(
-      `SELECT mdr_bps FROM merchants WHERE id = $1`,
+    const merchantResult = await client.query<{ mdr_bps: number; negotiated_discount_bps: number }>(
+      `SELECT mdr_bps, negotiated_discount_bps FROM merchants WHERE id = $1`,
       [input.merchantId],
     );
     const merchant = merchantResult.rows[0];
@@ -165,7 +140,7 @@ export async function captureTransaction(
     // a negotiated rate change recorded. Resolved at the instant of capture,
     // inside the same locked transaction that computes and journals the fee.
     const effectiveMdrBps = await getEffectiveMdrBps(client, input.merchantId, new Date(), merchant.mdr_bps);
-    const volumeTierBonusBps = await getVolumeTierBonusBps(client);
+    const volumeTierBonusBps = await getAppliedVolumeTierBonusBps(client); // 0 until finance approves the tier
 
     // Call the acquirer — awaited here, with the row lock from above still
     // held (same client, same open transaction). No other process can
@@ -193,9 +168,23 @@ export async function captureTransaction(
 
     // outcome === 'approved'. Integer math throughout — no float ever
     // enters this path.
-    const feeFils = applyRateFils(requestedAmount, Math.max(0, effectiveMdrBps - volumeTierBonusBps));
+    // Same formula as settlement's ComputeSettlementFee, the reference
+    // (CLAUDE.md): the negotiated discount share of the amount is fee-free,
+    // then MDR applies. The discount used to be credited back afterwards by
+    // routes/transactions.ts in a separate transaction (lost if that step
+    // failed), and payment-link checkout never applied it at all.
+    const discountBps = merchant.negotiated_discount_bps ?? 0;
+    const feeBaseFils = subtractFils(requestedAmount, applyRateFils(requestedAmount, discountBps));
+    const feeFils = applyRateFils(feeBaseFils, Math.max(0, effectiveMdrBps - volumeTierBonusBps));
     const newCapturedFils = addFils(capturedSoFar, requestedAmount);
-    const newStatus = compareFils(newCapturedFils, amountAuthorized) === 0 ? "captured" : "partially_captured";
+    // Same rule as a refund (refundState.ts): once the authorization is fully
+    // captured, earlier refunds decide the status. This used to say
+    // "captured" even after part of the money had been refunded.
+    const newStatus = nextStatusAfterRefund({
+      amountFils: amountAuthorized,
+      capturedFils: newCapturedFils,
+      refundedTotalFils: toFils(Number(txn.refunded_fils ?? 0)),
+    });
 
     const updateResult = await client.query<TransactionRow>(
       `UPDATE transactions SET status = $2, captured_fils = $3 WHERE id = $1 RETURNING *`,

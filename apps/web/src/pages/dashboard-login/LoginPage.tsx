@@ -7,26 +7,25 @@ import {
   useDashboardAuth,
   writeLastMerchantId,
 } from "../../auth/DashboardAuthContext.js";
-import type { DashboardLoginResponse } from "../../types.js";
+import type { DashboardLoginResponse, DashboardMerchantChoice } from "../../types.js";
 import "../../dashboard.css";
 
-type Step = { kind: "credentials" } | { kind: "otp"; challenge: DashboardLoginResponse };
+type Step =
+  | { kind: "credentials" }
+  | { kind: "choose"; merchants: DashboardMerchantChoice["merchants"] }
+  | { kind: "otp"; challenge: DashboardLoginResponse };
 
 /**
- * Two-step merchant login: merchantId + email + password
- * creates a *pending* session and issues an OTP challenge; the OTP step is
- * what actually authenticates it. Neither step is told which credential was
- * wrong — the API answers a single generic `invalid_credentials`, and this
- * screen repeats it verbatim rather than guessing at something more specific.
+ * Two-step merchant login: email + password creates a *pending* session and
+ * issues an OTP challenge; the OTP step is what actually authenticates it.
+ * Neither step is told which credential was wrong — the API answers a single
+ * generic `invalid_credentials`, repeated here verbatim.
  *
- * The Merchant ID field is a raw pasted UUID. This is a genuine rough edge,
- * not a preference: `merchant_users.email` is unique per merchant rather than
- * globally (Phase 1 schema), so an email alone cannot identify a user, and no
- * merchant slug or subdomain concept exists anywhere in the platform to infer
- * the id from. `localStorage` remembering the last-used value is the whole
- * mitigation available without new backend work; a lookup-by-email endpoint
- * or a per-merchant subdomain would be the real fix, and both are out of
- * scope for a frontend-only phase.
+ * No Merchant ID field: people know their email, not a UUID. The merchant id
+ * stays the account key in the database and API. When one email opens
+ * accounts at several businesses (same password), the API lists them and the
+ * page asks "Which business?", then logs in again with that merchantId.
+ * The last business used is remembered on this device and listed first.
  */
 export function LoginPage() {
   const { status, refresh } = useDashboardAuth();
@@ -34,8 +33,9 @@ export function LoginPage() {
   const location = useLocation();
 
   const [step, setStep] = useState<Step>({ kind: "credentials" });
-  // MK: remembers the last merchantId in localStorage. not a secret
-  const [merchantId, setMerchantId] = useState(() => readLastMerchantId());
+  // The business the session is for, once known (only chosen explicitly when
+  // one email has several). Remembered on this device after a sign-in.
+  const [merchantId, setMerchantId] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -52,23 +52,36 @@ export function LoginPage() {
   function backToCredentials(message: string | null): void {
     setStep({ kind: "credentials" });
     setCode("");
+    setMerchantId("");
     setError(message);
   }
 
-  async function handleCredentials(event: React.FormEvent): Promise<void> {
-    event.preventDefault();
+  async function signIn(chosenMerchantId?: string): Promise<void> {
     setSubmitting(true);
     setError(null);
     setNotice(null);
     try {
-      const challenge = await login({ merchantId: merchantId.trim(), email, password });
-      setStep({ kind: "otp", challenge });
+      const result = await login({ email, password, ...(chosenMerchantId ? { merchantId: chosenMerchantId } : {}) });
+      if ("merchantChoiceRequired" in result) {
+        // Last-used business first, then alphabetical (the API's order).
+        const last = readLastMerchantId();
+        const merchants = [...result.merchants].sort((a, b) => Number(b.merchantId === last) - Number(a.merchantId === last));
+        setStep({ kind: "choose", merchants });
+        return;
+      }
+      setMerchantId(chosenMerchantId ?? "");
+      setStep({ kind: "otp", challenge: result });
       setPassword("");
     } catch (err) {
       setError(describeError(err));
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleCredentials(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    await signIn();
   }
 
   // after otp we get logged out after ~10 min. cookie ttl never extended? — am
@@ -79,8 +92,8 @@ export function LoginPage() {
     setError(null);
     setNotice(null);
     try {
-      await verifyOtp({ code });
-      writeLastMerchantId(merchantId.trim());
+      const verified = await verifyOtp({ code });
+      writeLastMerchantId(verified.merchantId);
       // The session cookie is now authenticated server-side; re-read `me` so
       // the rest of the dashboard renders from the server's answer, not from
       // the verify response we happen to be holding.
@@ -130,22 +143,6 @@ export function LoginPage() {
       {step.kind === "credentials" ? (
         <form onSubmit={(e) => void handleCredentials(e)} className="dash-form">
           <label>
-            Merchant ID
-            <input
-              type="text"
-              required
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="00000000-0000-0000-0000-000000000000"
-              value={merchantId}
-              onChange={(e) => setMerchantId(e.target.value)}
-            />
-          </label>
-          <p className="dash-muted dash-hint">
-            The UUID issued when your account was created. Your API integration
-            already uses this value.
-          </p>
-          <label>
             Email
             <input
               type="email"
@@ -169,6 +166,26 @@ export function LoginPage() {
             {submitting ? "Signing in..." : "Continue"}
           </button>
         </form>
+      ) : step.kind === "choose" ? (
+        <div className="dash-form">
+          <p>
+            <strong>{email}</strong> has accounts at more than one business. Which one do you want to open?
+          </p>
+          {step.merchants.map((m) => (
+            <button
+              key={m.merchantId}
+              type="button"
+              className="dash-button"
+              disabled={submitting}
+              onClick={() => void signIn(m.merchantId)}
+            >
+              {m.displayName}
+            </button>
+          ))}
+          <button type="button" className="dash-button" onClick={() => backToCredentials(null)}>
+            Back
+          </button>
+        </div>
       ) : (
         <form onSubmit={(e) => void handleOtp(e)} className="dash-form">
           <p>

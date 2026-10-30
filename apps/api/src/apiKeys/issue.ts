@@ -19,7 +19,8 @@ export interface IssuedApiKey {
  * a programming mistake surfaces as a clear error rather than as a raw
  * constraint-violation message.
  */
-/** @property rotatedFromKeyId When set, that key is revoked in the same transaction. */
+/** @property rotatedFromKeyId Recorded as the predecessor. This function does not revoke it;
+ *  rotateApiKeyAsAdmin gives it a revoke_after grace deadline. */
 export interface IssueApiKeyInput {
   merchantId: string;
   createdBy?: string;

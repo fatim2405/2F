@@ -39,6 +39,16 @@ export function errorHandler(
     return;
   }
 
+  // Postgres refusing a malformed value is a bad request, not a server error:
+  // a non-UUID id in the path (22P02) or a garbage date or cursor (22007,
+  // 22008). These used to answer 500 internal_error on many routes. (A CHECK
+  // violation stays a 500: it can be our own write failing, e.g. the audit log.)
+  const pgCode = (err as { code?: unknown }).code;
+  if (pgCode === "22P02" || pgCode === "22007" || pgCode === "22008") {
+    reply.code(400).send({ error: "invalid_request", message: "One of the values sent is not valid." });
+    return;
+  }
+
   request.log.error({ err, occurredOn: formatIsoDate(new Date()) }, "unhandled error");
   reply.code(500).send({ error: "internal_error" });
 }

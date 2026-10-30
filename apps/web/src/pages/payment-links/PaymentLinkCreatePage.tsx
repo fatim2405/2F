@@ -3,17 +3,15 @@ import { Link, useNavigate } from "react-router-dom";
 import { createPaymentLink } from "../../api/paymentLinks.js";
 import { describeError } from "../../api/client.js";
 import { useDashboardAuth } from "../../auth/DashboardAuthContext.js";
-import { localDateTimeToIso } from "../../format.js";
+import { localDateTimeToIso, parseBdAmountInput } from "../../format.js";
 
 /**
  * `POST /v1/merchants/:merchantId/payment-links`, `owner`/`finance`
  * server-side.
  *
- * Amount is entered in fils — the platform's actual unit, and the same unit
- * the checkout page works in. No decimal-BHD input widget: a second
- * string-to-fils parser in the browser is exactly the kind of place a money
- * bug hides, and `parseBhdToFils` exists in @filspay/money for whenever a
- * phase genuinely wants that UI.
+ * Amount is entered in BD, like every amount the dashboard shows, and read
+ * as whole fils by parseBdAmountInput (format.ts), which uses
+ * @filspay/money's parseBhdToFils: no second parser in the browser.
  *
  * The two client-side checks below mirror the server's own two real checks so
  * an obviously-bad value doesn't need a round trip. They are not the
@@ -24,22 +22,23 @@ export function PaymentLinkCreatePage() {
   const { me } = useDashboardAuth();
   const navigate = useNavigate();
 
-  const [amountFils, setAmountFils] = useState("");
+  const [amountBd, setAmountBd] = useState("");
   const [reference, setReference] = useState("");
   const [description, setDescription] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // YA: amount typed as raw fils, no BD conversion. intentional for now
   async function handleSubmit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     if (!me) return;
     setError(null);
 
-    const amount = Number(amountFils);
-    if (!Number.isInteger(amount) || amount <= 0) {
-      setError("Amount must be a positive whole number of fils.");
+    let amount: number;
+    try {
+      amount = parseBdAmountInput(amountBd);
+    } catch (err) {
+      setError((err as Error).message);
       return;
     }
     const expiresAtIso = localDateTimeToIso(expiresAt);
@@ -76,17 +75,17 @@ export function PaymentLinkCreatePage() {
 
       <form className="dash-form" onSubmit={(e) => void handleSubmit(e)}>
         <label>
-          Amount in fils
+          Amount in BD
           <input
-            type="number"
-            min={1}
-            step={1}
+            type="text"
+            inputMode="decimal"
+            placeholder="e.g. 4.750"
             required
-            value={amountFils}
-            onChange={(e) => setAmountFils(e.target.value)}
+            value={amountBd}
+            onChange={(e) => setAmountBd(e.target.value)}
           />
         </label>
-        <p className="dash-muted dash-hint">1000 fils = 1.000 BHD.</p>
+        <p className="dash-muted dash-hint">Up to 3 decimals: 1.000 BD = 1000 fils.</p>
         <label>
           Reference (optional)
           <input type="text" value={reference} onChange={(e) => setReference(e.target.value)} />

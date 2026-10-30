@@ -32,8 +32,12 @@ export async function getCurrentFeeScheduleForDisplay(
   const result = await pool.query<{ mdr_bps: number; effective_from: Date; created_at: Date }>(
     `SELECT mdr_bps, effective_from, created_at
        FROM fee_schedules
-      WHERE merchant_id = $1
-      ORDER BY created_at DESC
+      -- The rate in effect now, chosen the same way capture charges it
+      -- (fees/feeSchedule.ts). Ordering by created_at alone showed the most
+      -- recently ENTERED row: a backdated backfill (245 bps, effective March,
+      -- entered August) was displayed while 225 bps was being charged.
+      WHERE merchant_id = $1 AND effective_from <= now()
+      ORDER BY effective_from DESC, created_at DESC
       LIMIT 1`,
     [merchantId],
   );

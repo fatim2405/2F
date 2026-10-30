@@ -16,8 +16,8 @@ const MAX_BATCH_SIZE = 500;
  *  `pending`/`succeeded`/`failed` are accepted if a caller explicitly asks
  *  for them — deliberately resending a `succeeded` delivery is a legitimate,
  *  if unusual, operator action — but they are never the default. */
-// support can pass status=succeeded and replay everything — am
-// MK: the route rejects succeeded
+// The route only lets support replay exhausted/failed; other statuses need
+// finance or super_admin (routes/adminMerchants.ts).
 export const DEFAULT_REPLAY_STATUSES = ["exhausted"] as const;
 
 export interface BatchReplayResult {
