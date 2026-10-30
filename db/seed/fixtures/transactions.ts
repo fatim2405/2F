@@ -195,9 +195,11 @@ const MARKETPLACE_ORDER_TOTALS_FILS: readonly number[] = [
 export interface GeneratedCaptureEvent {
   transactionId: string;
   amountFils: Fils;
-  /** The fee actually charged at capture time, i.e. the MDR fee less the
-   *  merchant's negotiated discount off it — the value capture.ts records
-   *  in `transaction_events.metadata.feeFils`. */
+  /** The fee net of the merchant's negotiated discount. Note: real
+   *  capture.ts records the fee BEFORE the discount in
+   *  `transaction_events.metadata.feeFils` (discountAdjustment.ts applies
+   *  the discount afterwards), so this seeded value differs from what a real
+   *  capture would store for a discounted merchant. */
   feeFils: Fils;
   occurredAt: Date;
 }
@@ -301,8 +303,10 @@ const MULTI_CAPTURE_INSTALMENTS_FILS: readonly (readonly number[])[] = [
   [70_000, 50_000],
 ];
 
-/** A single trading day well clear of every other fixture's window, so a
- *  query scoped to it sees these transactions and nothing else. The first
+/** A fixed trading day for the instalment fixture. It is NOT exclusive:
+ *  alpha-retail's standard month of transactions (0–29 days before
+ *  SEED_BASE_DATE, 2026-09-01) can also land on it, so a query scoped to
+ *  this date may see other alpha-retail transactions too. The first
  *  transaction authorizes at 09:00 UTC (midday Asia/Bahrain) and each
  *  subsequent one an hour later, so all of them sit squarely inside the
  *  Bahrain-local business day for this date with hours to spare. */

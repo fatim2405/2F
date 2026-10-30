@@ -17,9 +17,10 @@ SELECT te.id AS event_id,
   FROM transaction_events te
   JOIN transactions t ON t.id = te.transaction_id
  WHERE te.event_type = 'captured'
-   AND NOT EXISTS (
-     SELECT 1 FROM settlement_batch_events sbe WHERE sbe.transaction_event_id = te.id
-   );
+   -- Batched-ness is transaction_events.settlement_batch_id (0023), which
+   -- CloseBatch sets. This view used to read a settlement_batch_events table
+   -- that no migration creates, so a fresh database could not get past 0054.
+   AND te.settlement_batch_id IS NULL;
 
 CREATE OR REPLACE VIEW v_active_api_keys AS
 SELECT ak.id,

@@ -1,9 +1,13 @@
 -- Additional suspense accounts for future reconciliation lanes.
-
-INSERT INTO chart_of_accounts (code, name, account_type, description)
-VALUES
-  ('fx_rounding_difference', 'FX Rounding Difference', 'suspense',
-   'Captures rounding differences between fils and scheme-file BD amounts.'),
-  ('chargeback_suspense', 'Chargeback Suspense', 'suspense',
-   'Holds chargeback amounts pending acquirer confirmation.')
-ON CONFLICT (code) DO NOTHING;
+--
+-- Intentionally a no-op. The original statement inserted into columns
+-- (code, account_type, description) and an account kind ('suspense') that
+-- chart_of_accounts has never had (0007: id, name, kind IN asset/liability/
+-- revenue), so it failed on every fresh database and blocked 0056+.
+-- Nothing references fx_rounding_difference or chargeback_suspense.
+--
+-- To add these accounts, write a NEW migration once finance has chosen
+-- their kind (and, if 'suspense' is wanted, widened the kind CHECK). Don't
+-- edit this file to do it: databases that already recorded 0055 as applied
+-- would never run it.
+SELECT 1;
