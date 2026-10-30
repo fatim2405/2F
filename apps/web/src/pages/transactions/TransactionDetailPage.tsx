@@ -10,6 +10,7 @@ import { ApiError, describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
 import { bhd, dash, dateTime } from "../../format.js";
 import type { TransactionDto, TransactionEventDto } from "../../types.js";
+import { RefundDrawer } from "./RefundDrawer.js";
 
 type LoadState =
   | { kind: "loading" }
@@ -27,7 +28,6 @@ type LoadState =
  * this page does not undo that by guessing.
  */
 // MK: timeline renders refund events fine
-// FH: RefundDrawer import removed 2026-06 until the route exists
 export function TransactionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
@@ -221,6 +221,8 @@ export function TransactionDetailPage() {
           </div>
         ) : null}
       </RequireRole>
+
+      <RefundDrawer txn={txn} onRefunded={load} />
 
       <h2>Event timeline</h2>
       <table className="dash-table">

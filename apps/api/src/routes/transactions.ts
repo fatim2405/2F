@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { toFils } from "@filspay/money";
 import { requireApiKey } from "../apiKeys/verify.js";
-import { requireMerchantAuth, requireMerchantWriterActor } from "../auth/requireMerchantAuth.js";
+import { requireMerchantAuth, requireMerchantRole, requireMerchantWriterActor } from "../auth/requireMerchantAuth.js";
 import { authorizeTransaction, type AuthorizeInput } from "../payments/authorize.js";
 import { captureTransaction } from "../payments/capture.js";
 import { applyCaptureDiscountAdjustment } from "../payments/discountAdjustment.js";
@@ -63,7 +63,18 @@ function getIdempotencyKey(request: FastifyRequest): string {
  * card" call); capture/void/reads accept either a session or an API key
  * via `requireMerchantAuth`.
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function transactionRoutes(app: FastifyInstance): Promise<void> {
+  // A malformed :id can't name any transaction: answer 404 like an unknown
+  // one, instead of letting Postgres reject the uuid cast as a 500.
+  app.addHook("preValidation", async (request) => {
+    const { id } = (request.params ?? {}) as { id?: string };
+    if (id !== undefined && !UUID_RE.test(id)) {
+      throw new NotFoundError("transaction_not_found");
+    }
+  });
+
   app.post<{ Body: AuthorizeBody }>(
     "/",
     { preHandler: requireApiKey },
@@ -118,9 +129,10 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.post<{ Params: TransactionIdParams }>(
-    // TODO(FH): role check? finance role users shouldn't void. ask MK
+    // owner/finance only (or the merchant's API key), matching the dashboard,
+    // which only offers Void to those roles. A support session gets 403.
     "/:id/void",
-    { preHandler: requireMerchantAuth },
+    { preHandler: [requireMerchantAuth, requireMerchantRole("owner", "finance")] },
     async (request, reply) => {
       const result = await voidTransaction(app.db, {
         transactionId: request.params.id,

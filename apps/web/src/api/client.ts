@@ -34,7 +34,8 @@ export class ApiError extends Error {
  */
 // FH: credentials include needs allow-credentials CORS on the api. works locally
 // this leaks the session cookie to whatever VITE_API_BASE_URL is — am
-// — MK: CORS is locked to the two origins in config. fine
+// The api only sends credentialed CORS headers to origins in
+// CORS_ALLOWED_ORIGINS (apps/api/src/plugins/cors.ts).
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const hasBody = init?.body !== undefined && init.body !== null;
   const res = await fetch(`${API_BASE_URL}${path}`, {

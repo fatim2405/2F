@@ -59,9 +59,13 @@ export async function initiateMerchantRefund(
 ): Promise<ProcessRefundResult> {
   await assertRefundsNotOnHold(pool, input.merchantId);
 
+  // Scoped to the caller's merchant: assertRefundRequestScope only checks the
+  // path merchant against the session, so without this filter merchant B
+  // could refund merchant A's transaction by id. Another merchant's
+  // transaction is a 404, the same as one that doesn't exist.
   const result = await pool.query<{ id: string; merchant_id: string }>(
-    `SELECT id, merchant_id FROM transactions WHERE id = $1`,
-    [input.transactionId],
+    `SELECT id, merchant_id FROM transactions WHERE id = $1 AND merchant_id = $2`,
+    [input.transactionId, input.merchantId],
   );
   const txn = result.rows[0];
   if (!txn) {

@@ -31,6 +31,14 @@ export function errorHandler(
     return;
   }
 
+  // Fastify's own client errors (malformed or empty JSON body, unsupported
+  // content type, body too large) carry a 4xx statusCode: the caller sent a
+  // bad request, so answer with it instead of a 500.
+  if (typeof fastifyErr.statusCode === "number" && fastifyErr.statusCode >= 400 && fastifyErr.statusCode < 500) {
+    reply.code(fastifyErr.statusCode).send({ error: "invalid_request", message: fastifyErr.message });
+    return;
+  }
+
   request.log.error({ err, occurredOn: formatIsoDate(new Date()) }, "unhandled error");
   reply.code(500).send({ error: "internal_error" });
 }

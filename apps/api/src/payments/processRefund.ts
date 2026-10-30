@@ -109,13 +109,17 @@ export async function processRefund(
     // The fee this transaction was actually charged at capture, read from
     // the ledger rather than recomputed from the merchant's current
     // mdr_bps, so a rate change after capture can never retroactively alter
-    // what a refund reverses.
+    // what a refund reverses. "Charged" is net of the negotiated discount
+    // that discountAdjustment.ts gives back at capture (a debit on fee
+    // revenue); counting only the credits made a refund return that
+    // discount a second time. Earlier refunds' own fee reversals are not
+    // subtracted here: calculateRefundFee works from the original charge.
     const feeResult = await client.query<{ fee_fils: string }>(
-      `SELECT COALESCE(SUM(amount_fils), 0)::text AS fee_fils
+      `SELECT COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_fils ELSE -amount_fils END), 0)::text AS fee_fils
          FROM ledger_entries
         WHERE transaction_id = $1
           AND account_id = 'platform_fee_revenue'
-          AND direction = 'credit'`,
+          AND (direction = 'credit' OR description = 'capture: negotiated discount adjustment')`,
       [txn.id],
     );
     const feeRow = feeResult.rows[0];
@@ -186,7 +190,10 @@ export async function processRefund(
         prepared.requestedAmount,
         feeReversedFils,
         acquirerResult.acquirerReference,
-        input.reason ?? null,
+        // Passing NULL explicitly bypasses the column default and trips
+        // chk_refunds_reason_not_null (migration 0070), failing every refund
+        // without a reason. Use the same default the migration sets.
+        input.reason ?? "unspecified",
         input.actor.type,
         input.actor.id,
       ],
