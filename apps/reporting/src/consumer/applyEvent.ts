@@ -144,11 +144,15 @@ async function applyBatchClosed(client: PoolClient, row: OutboxEventRow): Promis
       `SELECT captured_count FROM merchant_daily_volume WHERE merchant_id = $1 AND volume_date = $2`,
       [payload.merchantId, payload.batchDate],
     );
-    const rollup = rollupResult.rows[0] as { captured_count: number };
-    if (rollup.captured_count < groundTruthCount) {
+    // No rollup row yet for that day is the most-lagging case (0), not an
+    // error: this check only warns. Reading captured_count off a missing row
+    // used to throw, which rolled back the pass and stalled the whole
+    // consumer behind this event.
+    const rollupCount = Number((rollupResult.rows[0] as { captured_count?: number } | undefined)?.captured_count ?? 0);
+    if (rollupCount < groundTruthCount) {
       console.warn(
         `reporting rollup lags ground truth for merchant ${payload.merchantId} on ${payload.batchDate}: ` +
-          `rollup=${rollup.captured_count} ground_truth=${groundTruthCount}`,
+          `rollup=${rollupCount} ground_truth=${groundTruthCount}`,
       );
     }
   }

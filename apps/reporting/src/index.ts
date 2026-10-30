@@ -3,6 +3,7 @@ import { createPool } from "./db/pool.js";
 import { runWorker } from "./cli/worker.js";
 import { runCatchUp } from "./cli/catchUp.js";
 import { runRebuild } from "./cli/rebuild.js";
+import { runSkipEvent } from "./cli/skipEvent.js";
 
 /**
  * apps/reporting's entrypoint. A pure background worker
@@ -10,7 +11,8 @@ import { runRebuild } from "./cli/rebuild.js";
  * apps/api/apps/settlement. Subcommand dispatch: `worker` (default,
  * long-running daemon), `catch-up` (one-shot backfill), `rebuild`
  * (one-shot, CLI-only recovery tool — never auto-invoked, never
- * HTTP-exposed).
+ * HTTP-exposed), `skip-event <id>` (one-shot: clears a single stuck event
+ * at the head of the queue, after review).
  */
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
@@ -30,6 +32,11 @@ async function main(): Promise<void> {
       return pool.end();
     case "rebuild":
       await runRebuild(pool, config);
+      return pool.end();
+    case "skip-event":
+      // One-shot recovery for a stuck consumer: skips only the event at the
+      // head of the queue, after review (cli/skipEvent.ts).
+      await runSkipEvent(pool, process.argv[3]);
       return pool.end();
     default:
       console.error(`unknown subcommand: ${subcommand}`);

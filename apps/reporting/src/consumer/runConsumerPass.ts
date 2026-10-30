@@ -56,7 +56,19 @@ export async function runConsumerPass(
     // FH: redundant with ORDER BY id ASC (last row is max). harmless
     let maxId = cursor.lastProcessedId;
     for (const row of eventsResult.rows) {
-      await applyEvent(client, row);
+      try {
+        await applyEvent(client, row);
+      } catch (err) {
+        // Still rolls back the whole pass (the retry-the-same-range
+        // contract above), but names the event that blocks it: a failing
+        // event is retried forever until someone clears it.
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `reporting: outbox event ${row.id} (${row.event_type}) cannot be applied: ${reason}. ` +
+            `Every later event waits behind it. After review, clear it with: reporting skip-event ${row.id}`,
+          { cause: err },
+        );
+      }
       const rowId = BigInt(row.id);
       if (rowId > maxId) maxId = rowId;
     }
